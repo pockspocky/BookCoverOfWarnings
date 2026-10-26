@@ -1,7 +1,7 @@
 import { serve } from '@hono/node-server'
 import { createIdentityProvider } from './auth/identity'
 import { createDatabase, createSql } from './db/client'
-import { migrate } from './db/migrate'
+import { migrateWithLock } from './db/migrate'
 import { loadDotEnv, loadEnv } from './env'
 import { createApp } from './http/app'
 import { createMetadataScanner, createS3Storage } from './services/storage'
@@ -11,7 +11,7 @@ const env = loadEnv()
 const sql = createSql(env.databaseUrl)
 const db = createDatabase(sql)
 
-await migrate(sql)
+await migrateWithLock(sql)
 const storage = createS3Storage(env)
 try {
   await storage.ensureBucket()

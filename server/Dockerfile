@@ -1,3 +1,4 @@
+# Build context is the repository root: the image copies both server/ and lib/.
 FROM node:22-bookworm-slim
 WORKDIR /app
 
