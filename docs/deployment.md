@@ -54,15 +54,19 @@ For cookie sessions, the browser origin in `WEB_ORIGIN` must be allowed to send 
 
 ## Vercel
 
-One Vercel project serves the Nuxt client and the API on the same host. The browser calls `/api` there, so the `bow_session` cookie stays on that site. Do not deploy the `server/` package as its own project. `*.vercel.app` is a public suffix, and a second project would drop the cookie.
+Vercel Services (Beta) ships the Nuxt client and the API container as one project and one domain. `vercel.json` sends `/api/*` and `/health` to the `server` service and every other path to the `app` service. The browser calls same-origin `/api`, so the `bow_session` cookie stays on that site. Do not deploy `server/` as its own Vercel project. `*.vercel.app` is a public suffix, and a second hostname would drop the cookie.
 
-Import the repository with the Nuxt framework and the repository root as the root directory. Use Node.js 22. Vercel runs `nuxt build`. Nitro's server directory is `app/server`, so it does not scan the Hono package in `server/`. The catch-all route forwards `/api/*` to `createApp`. Each instance initializes that app once, runs the SQL in `server/drizzle` under `pg_advisory_xact_lock`, and does not call `serve()`. `npm run dev --prefix server` and `docker compose` still start the long-running API.
+There is no service binding. The browser is the caller, and a binding URL is only injected into functions at runtime. It is not available while Nuxt compiles `NUXT_PUBLIC_API_BASE_URL`. Leave that variable empty so the client uses the public `/api` path.
+
+The API service builds `Dockerfile.api` from the repository root, because that image copies both `server/` and `lib/`. Local Compose still uses `server/Dockerfile`. It listens on `0.0.0.0` and runs `server/src/index.ts`. Startup applies `server/drizzle` under `pg_advisory_xact_lock`. `npm run dev --prefix server` and `docker compose` still start that process locally. `vercel dev` runs both services.
+
+Import the repository and let `vercel.json` choose the services. Use Node.js 22. The Nuxt service root is the repository root. Nitro's server directory stays `app/server`, so the Nuxt build does not scan the Hono package or serve `/api` itself.
 
 ### Neon
 
 Add Neon Postgres and set `DATABASE_URL` to the pooled connection string. The hostname contains `-pooler`. A direct Neon URL lets serverless instances exhaust the connection limit. On Vercel the pool size is 1, prepared statements are off (Neon's pooler is PgBouncer in transaction mode), and idle connections close after 20 seconds.
 
-Cold starts apply migrations inside one transaction while holding the advisory lock, so two instances cannot change the schema at the same time. The lock is transaction-scoped so it still works through the pooler. Migrations create empty tables. Do not copy the local `bow` database, its administrator, or rows created by browser tests.
+Each API container applies migrations inside one transaction while holding the advisory lock, so two instances cannot change the schema at the same time. The lock is transaction-scoped so it still works through the pooler. Migrations create empty tables. Do not copy the local `bow` database, its administrator, or rows created by browser tests.
 
 Production startup rejects placeholder passwords such as `bow`.
 

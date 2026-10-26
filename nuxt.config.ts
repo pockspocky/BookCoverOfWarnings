@@ -1,13 +1,10 @@
-import { fileURLToPath } from 'node:url'
 import { publicApiBaseUrl } from './lib/utils/api-url'
-
-const migrationDir = fileURLToPath(new URL('./server/drizzle', import.meta.url))
 
 export default defineNuxtConfig({
   compatibilityDate: '2025-10-01',
   ssr: false,
   srcDir: 'app',
-  // The Hono package lives in server/. Nitro routes live in app/server.
+  // Keep Nitro off the Hono package in server/. Vercel sends /api to the server service.
   serverDir: 'app/server',
   css: ['~/assets/css/main.css'],
   modules: ['@nuxtjs/tailwindcss', '@pinia/nuxt'],
@@ -35,14 +32,6 @@ export default defineNuxtConfig({
   nitro: {
     prerender: {
       crawlLinks: false
-    },
-    serverAssets: [{
-      baseName: 'migrations',
-      dir: migrationDir,
-      pattern: '*.sql'
-    }],
-    routeRules: {
-      '/api/**': { prerender: false }
     }
   }
 })

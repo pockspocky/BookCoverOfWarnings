@@ -1,3 +1,4 @@
+# Build context is the repository root: the image copies both server/ and lib/.
 FROM node:22-bookworm-slim
 WORKDIR /app
 
@@ -11,6 +12,7 @@ COPY server ./server
 WORKDIR /app/server
 
 ENV NODE_ENV=production
+ENV NODE_PATH=/app/server/node_modules
 ENV PORT=3001
 EXPOSE 3001
 CMD ["npx", "tsx", "src/index.ts"]
