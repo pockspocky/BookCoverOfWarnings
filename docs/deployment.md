@@ -58,7 +58,7 @@ Vercel Services (Beta) ships the Nuxt client and the API container as one projec
 
 There is no service binding. The browser is the caller, and a binding URL is only injected into functions at runtime. It is not available while Nuxt compiles `NUXT_PUBLIC_API_BASE_URL`. Leave that variable empty so the client uses the public `/api` path.
 
-The API service builds `server/Dockerfile` with the repository root as its context, because that image copies both `server/` and `lib/`. It listens on `0.0.0.0` and runs `server/src/index.ts`. Startup applies `server/drizzle` under `pg_advisory_xact_lock`. `npm run dev --prefix server` and `docker compose` still start that process locally. `vercel dev` runs both services.
+The API service builds `Dockerfile.api` from the repository root, because that image copies both `server/` and `lib/`. Local Compose still uses `server/Dockerfile`. It listens on `0.0.0.0` and runs `server/src/index.ts`. Startup applies `server/drizzle` under `pg_advisory_xact_lock`. `npm run dev --prefix server` and `docker compose` still start that process locally. `vercel dev` runs both services.
 
 Import the repository and let `vercel.json` choose the services. Use Node.js 22. The Nuxt service root is the repository root. Nitro's server directory stays `app/server`, so the Nuxt build does not scan the Hono package or serve `/api` itself.
 

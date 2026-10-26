@@ -8,7 +8,7 @@
     "server": {
       "root": ".",
       "runtime": "container",
-      "entrypoint": "server/Dockerfile",
+      "entrypoint": "Dockerfile.api",
       "devCommand": "npm run dev --prefix server"
     }
   },
