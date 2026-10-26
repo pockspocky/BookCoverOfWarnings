@@ -1,0 +1,30 @@
+# Dependencies and build output
+node_modules/
+.nuxt/
+.nitro/
+.output/
+.vercel/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Tests and browser tooling
+.playwright-report/
+test-results/
+playwright/.auth
+
+# Secrets. Examples stay tracked.
+.env
+.env.*
+!.env.example
+server/.env
+server/.env.*
+!server/.env.example
+secrets/
+
+# Local editor and OS files
+.cursor/
+.idea/
+.vscode/
+.DS_Store
+*.log

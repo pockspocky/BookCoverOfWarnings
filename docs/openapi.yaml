@@ -1,0 +1,2145 @@
+openapi: 3.1.0
+info:
+  title: Book Of Warnings API
+  version: 0.1.0
+  summary: Authorized school directory and relationship database.
+  description: |
+    Contract for the Book Of Warnings HTTP API. The Nuxt client calls it through `HttpApiClient`.
+
+    The API enforces authentication, consent, and visibility. It is not a completed student-information compliance system. The local attachment scanner only rejects disallowed types and oversized files.
+
+    ## Authentication
+    - Password login and institutional callback set an httpOnly `SameSite=Lax` cookie named `bow_session`. The raw token is not returned in JSON.
+    - Browser clients send `credentials: include`. They do not store a session token. `GET /api/auth/session` returns `csrfToken` for the page to keep in memory.
+    - A mutation authenticated only by the cookie must send `X-CSRF-Token`. A request with `Authorization: Bearer` does not require CSRF. Bearer remains available to non-browser clients that already hold the cookie value.
+    - `GET /api/auth/oidc/start` redirects to the configured issuer using authorization code and PKCE. The callback accepts only a verified email on the configured school domain. It does not match a student from a display name. When `IDENTITY_PROVIDER` is not `oidc`, these routes do not create a session.
+    - Every endpoint re-checks authentication and authorization on the server. Nuxt route guards are not sufficient.
+
+    ## Visibility
+    - Private self-description (`sexualityPreset`, `sexualityCustom`) is available only at `/api/me/private-profile` to the matched student. It is omitted from every other schema on purpose.
+    - Evidence provider identity is admin-only.
+    - Ordinary members see other people's submissions without submitter identity or proposed content.
+    - Pending and rejected content is not returned from search, graph, or published directories.
+    - Rejection deletes submitted content. The API does not retain a content-bearing rejection archive.
+
+    ## Rate limits
+    - `POST /api/submissions`: 30 requests per authenticated session. Production should use a stricter window (recommended 10/hour) and must return `429`.
+    - `GET /api/search`: 120 requests per authenticated session. Production should enforce at most 60/minute and must return `429`.
+    - Response header `Retry-After` is recommended on `429`.
+
+    ## Concurrency and mirroring
+    - Corrections send `baseVersion`. A mismatch returns `409` and does not write.
+    - `createMirroredRelationship: true` creates both directions in one transaction. On failure, neither direction is published. The two records have different ids and are edited independently later.
+
+    ## Administrator publication
+    - `POST /api/admin/students`, `/api/admin/traits`, `/api/admin/evidence`, `/api/admin/memberships`, and `/api/admin/relationships` publish immediately. They do not create a submission.
+    - Those writes use the same validation, version check, and consent rules as approval. A supplied `baseVersion` that does not match returns `409` and does not write.
+    - A relationship that names a student returns `409` with `CONSENT_REQUIRED` when that consent is missing. Administrator publication does not create consent, and neither direction of a mirror is written.
+    - Members receive `403`. Trait, evidence, and relationship creates from members stay on `POST /api/submissions`. Student creation is administrator-only.
+    - Published removal is archive. Archiving a trait keeps shared evidence and version history. Ending a membership sets `endDate` and keeps the row.
+    - Request bodies for these routes do not include private self-description fields.
+servers:
+  - url: "{apiBaseUrl}"
+    variables:
+      apiBaseUrl:
+        default: http://localhost:3001
+tags:
+  - name: Auth
+  - name: Students
+  - name: PrivateProfile
+  - name: Traits
+  - name: Evidence
+  - name: Groups
+  - name: Relationships
+  - name: Search
+  - name: Graph
+  - name: Submissions
+  - name: Admin
+security:
+  - bearerAuth: []
+  - cookieAuth: []
+paths:
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Start a session
+      security: []
+      description: Validates the configured school-email domain and the local argon2id password. An empty email and password open one shared anonymous member session. That session has regular member access and is never an administrator. Accounts created by institutional login have no password and cannot use this route with a password. The response sets the httpOnly session cookie and returns csrfToken. It does not return the session token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authenticated account, csrfToken, and expiresAt. The session token is only in the httpOnly cookie.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthMutation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/Validation"
+  /api/auth/logout:
+    post:
+      tags: [Auth]
+      summary: End the current session
+      responses:
+        "204":
+          description: Session cleared.
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      summary: Current account, match, and permission labels
+      responses:
+        "200":
+          description: Current user. Permission labels are hints; the server still checks each action.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthUser"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/auth/session:
+    get:
+      tags: [Auth]
+      summary: Session probe
+      security: []
+      responses:
+        "200":
+          description: Whether a session is present. An authenticated response includes the CSRF token for later cookie mutations.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionInfo"
+  /api/auth/providers:
+    get:
+      tags: [Auth]
+      summary: Enabled sign-in methods
+      security: []
+      responses:
+        "200":
+          description: Password login is always available for local accounts. oidc is true only when an issuer is configured.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [password, oidc]
+                properties:
+                  password: { type: boolean }
+                  oidc: { type: boolean }
+  /api/auth/oidc/start:
+    get:
+      tags: [Auth]
+      summary: Redirect to the school identity provider
+      security: []
+      parameters:
+        - name: next
+          in: query
+          schema: { type: string }
+          description: Site path to open after a successful callback. Only a same-site path is accepted.
+      responses:
+        "302":
+          description: Redirect to the issuer. No session is created on this response.
+        "404":
+          description: Institutional login is not configured. JSON clients that send Accept application/json receive NOT_FOUND. Browsers are redirected to the login page.
+  /api/auth/oidc/callback:
+    get:
+      tags: [Auth]
+      summary: Complete institutional login
+      security: []
+      responses:
+        "302":
+          description: Sets the httpOnly session cookie and redirects to the site. Failure redirects to the login page and does not create a session.
+        "401":
+          description: JSON clients receive UNAUTHORIZED when the issuer response is rejected.
+  /api/students:
+    get:
+      tags: [Students]
+      summary: Published students
+      parameters:
+        - $ref: "#/components/parameters/q"
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/pageSize"
+        - name: graduationYear
+          in: query
+          schema: { type: integer }
+        - name: categoryId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: groupId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [name, graduationYear] }
+        - name: includeArchived
+          in: query
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Students visible to the caller. Private profile fields are absent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudentPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/students/{id}:
+    get:
+      tags: [Students]
+      summary: Student profile
+      parameters:
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: Profile with traits, memberships, and relationship ids. No private self-description.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudentDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/students/{id}/traits:
+    get:
+      tags: [Students]
+      parameters:
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: Traits linked to the student.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TraitPage"
+  /api/students/{id}/groups:
+    get:
+      tags: [Students]
+      parameters:
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: Memberships with role and dates.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MembershipPage"
+  /api/students/{id}/relationships:
+    get:
+      tags: [Students]
+      parameters:
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: Directional relationships touching the student.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RelationshipPage"
+  /api/students/{id}/history:
+    get:
+      tags: [Students]
+      parameters:
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: Published revisions, oldest or newest. Does not include rejected proposals.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VersionHistoryEntry"
+  /api/me/private-profile:
+    get:
+      tags: [PrivateProfile]
+      summary: Read the caller's private self-description
+      description: Allowed only when the session account has a matched student id. Administrators do not receive this resource unless that same account is the subject.
+      responses:
+        "200":
+          description: Private profile for the matched student.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudentPrivateProfile"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    patch:
+      tags: [PrivateProfile]
+      summary: Update the caller's private self-description
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PrivateProfilePatch"
+      responses:
+        "200":
+          description: Updated private profile. This does not publish the field.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrivateProfileMutation"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+  /api/traits:
+    get:
+      tags: [Traits]
+      parameters:
+        - $ref: "#/components/parameters/q"
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/pageSize"
+        - name: categoryId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: includeArchived
+          in: query
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Published traits.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TraitPage"
+  /api/traits/{id}:
+    get:
+      tags: [Traits]
+      parameters:
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: Trait, linked evidence metadata, and version history.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TraitDetail"
+  /api/trait-categories:
+    get:
+      tags: [Traits]
+      responses:
+        "200":
+          description: Active and inactive category catalog. Members may read; only admins may change it.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TraitCategory"
+  /api/evidence:
+    get:
+      tags: [Evidence]
+      parameters:
+        - $ref: "#/components/parameters/q"
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/pageSize"
+        - name: verificationStatus
+          in: query
+          schema: { $ref: "#/components/schemas/VerificationStatus" }
+        - name: minReliability
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 5 }
+        - name: fromDate
+          in: query
+          schema: { type: string, format: date }
+        - name: toDate
+          in: query
+          schema: { type: string, format: date }
+        - name: includeArchived
+          in: query
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Evidence metadata. Provider id is redacted for non-administrators. Attachment contents are not indexed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidencePage"
+  /api/evidence/{id}:
+    get:
+      tags: [Evidence]
+      parameters:
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: Evidence detail, referencing traits, and provider label according to role.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceDetail"
+  /api/evidence/{id}/traits:
+    get:
+      tags: [Evidence]
+      parameters:
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: Traits that reference this evidence.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TraitDetail"
+  /api/evidence/{id}/attachments/{attachmentId}:
+    get:
+      tags: [Evidence]
+      summary: Authorize retrieval of one attachment
+      description: Fails with 403 when the attachment is not authorized. Returns a short-lived storage URL after a second authorization check. File bytes are not in this response.
+      parameters:
+        - $ref: "#/components/parameters/id"
+        - name: attachmentId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Authorized file reference.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, fileName]
+                properties:
+                  url: { type: string }
+                  fileName: { type: string }
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/evidence/{id}/attachments/authorize:
+    post:
+      tags: [Evidence]
+      summary: Issue an upload authorization ticket
+      description: Accepts metadata only. The server must scan and store bytes later, outside this response. Unauthorized callers receive 401 or 403.
+      parameters:
+        - $ref: "#/components/parameters/id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fileName, contentType, sizeBytes]
+              properties:
+                fileName: { type: string }
+                contentType: { type: string }
+                sizeBytes: { type: integer, minimum: 1, maximum: 10000000 }
+      responses:
+        "200":
+          description: Ticket. File bytes are not part of this response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttachmentUploadAuthorization"
+        "422":
+          $ref: "#/components/responses/Validation"
+  /api/groups:
+    get:
+      tags: [Groups]
+      parameters:
+        - $ref: "#/components/parameters/q"
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/pageSize"
+        - name: includeArchived
+          in: query
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Group directory.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupPage"
+  /api/groups/{id}:
+    get:
+      tags: [Groups]
+      parameters:
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: Profile, current members, historical members, relationships, and version history.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupDetail"
+  /api/groups/{id}/members:
+    get:
+      tags: [Groups]
+      parameters:
+        - $ref: "#/components/parameters/id"
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/pageSize"
+        - name: includeArchived
+          in: query
+          schema: { type: boolean, description: When true, include ended memberships. }
+      responses:
+        "200":
+          description: Membership page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MembershipPage"
+  /api/groups/{id}/relationships:
+    get:
+      tags: [Groups]
+      parameters:
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: Relationships where the group is either endpoint.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RelationshipPage"
+  /api/group-roles:
+    get:
+      tags: [Groups]
+      responses:
+        "200":
+          description: Configurable membership roles.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/GroupRole"
+  /api/relationships:
+    get:
+      tags: [Relationships]
+      parameters:
+        - $ref: "#/components/parameters/q"
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/pageSize"
+        - name: relationshipTypeId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: sourceType
+          in: query
+          schema: { $ref: "#/components/schemas/EndpointType" }
+        - name: targetType
+          in: query
+          schema: { $ref: "#/components/schemas/EndpointType" }
+        - name: status
+          in: query
+          schema: { type: string }
+        - name: includeArchived
+          in: query
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Directional published relationships. A record does not imply its reverse.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RelationshipPage"
+  /api/relationships/{id}:
+    get:
+      tags: [Relationships]
+      parameters:
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: One direction, its history, and consent grants attached to that id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RelationshipDetail"
+  /api/relationships/{id}/history:
+    get:
+      tags: [Relationships]
+      parameters:
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: Revision timeline for this direction only.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VersionHistoryEntry"
+  /api/relationship-types:
+    get:
+      tags: [Relationships]
+      responses:
+        "200":
+          description: Administrator-managed relationship types.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RelationshipType"
+  /api/search:
+    get:
+      tags: [Search]
+      summary: Authorized cross-record search
+      description: |
+        Server-side pagination. Sexuality is not a filter and must not match. Pending submissions and rejected content are excluded.
+        Examples: students in a group (`groupId`) with a trait category (`traitCategoryId`); traits whose evidence meets `minReliability`; relationships whose endpoint is `connectedToType` + `connectedToId`.
+      parameters:
+        - $ref: "#/components/parameters/q"
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/pageSize"
+        - name: studentId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: graduationYear
+          in: query
+          schema: { type: integer }
+        - name: traitTitle
+          in: query
+          schema: { type: string }
+        - name: traitCategoryId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: groupId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: groupName
+          in: query
+          schema: { type: string }
+        - name: relationshipTypeId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: endpointType
+          in: query
+          schema: { $ref: "#/components/schemas/EndpointType" }
+        - name: endpointId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: connectedToType
+          in: query
+          schema: { $ref: "#/components/schemas/EndpointType" }
+        - name: connectedToId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: verificationStatus
+          in: query
+          schema: { $ref: "#/components/schemas/VerificationStatus" }
+        - name: minReliability
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 5 }
+        - name: fromDate
+          in: query
+          schema: { type: string }
+        - name: toDate
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string, description: "active, archived, or current" }
+        - name: entityTypes
+          in: query
+          schema: { type: string, description: Comma-separated entity types. }
+      responses:
+        "200":
+          description: Page of hits.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchPage"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /api/graph:
+    get:
+      tags: [Graph]
+      summary: Neighborhood overview
+      description: Returns a bounded neighborhood, not the full database. Payload excludes private fields.
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: nodeType
+          in: query
+          schema: { $ref: "#/components/schemas/EndpointType" }
+        - name: relationshipTypeId
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Nodes and directed edges.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GraphNeighborhood"
+  /api/graph/neighbors/{nodeType}/{nodeId}:
+    get:
+      tags: [Graph]
+      summary: Expand a neighborhood
+      parameters:
+        - name: nodeType
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/EndpointType" }
+        - name: nodeId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: depth
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 3, default: 1 }
+      responses:
+        "200":
+          description: Nodes and edges within depth hops. Archived relationships are omitted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GraphNeighborhood"
+  /api/dashboard/stats:
+    get:
+      tags: [Search]
+      responses:
+        "200":
+          description: Counts of authorized published records only.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardStats"
+  /api/dashboard/recent:
+    get:
+      tags: [Search]
+      responses:
+        "200":
+          description: Recent approved revisions. No pending or rejected content.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RecentUpdate"
+  /api/submissions:
+    post:
+      tags: [Submissions]
+      summary: Queue a proposal or a mirrored relationship pair
+      description: |
+        Members cannot publish by calling this endpoint. Personal relationships are stored as `awaiting_consent` until every subject requirement is satisfied.
+        When `proposedData.createMirroredRelationship` is true and `entityType` is `relationship`, the server creates both directions atomically.
+        Membership role proposals use `entityType=group_membership`.
+        Rate limit: 30 per session in the demo contract.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: "#/components/schemas/CreateSubmission"
+                - $ref: "#/components/schemas/CreateRelationship"
+      responses:
+        "200":
+          description: One submission, or two when a mirror was requested.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmissionMutation"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /api/submissions/mine:
+    get:
+      tags: [Submissions]
+      parameters:
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/pageSize"
+      responses:
+        "200":
+          description: The caller's own proposals, including status. Other members' identities are not listed here.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmissionPage"
+  /api/submissions/{id}:
+    get:
+      tags: [Submissions]
+      parameters:
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: Full proposal for the submitter or an administrator. Anonymous shape for everyone else.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/Submission"
+                  - $ref: "#/components/schemas/SubmissionPublic"
+  /api/submissions/{id}/consent:
+    post:
+      tags: [Submissions]
+      summary: Subject grants consent for a pending proposal
+      description: Only the matched student named by a consent requirement may call this. Admin role is not enough.
+      parameters:
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: Requirement marked satisfied. Publication still needs administrator approval.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmissionMutation"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/consents/{consentId}/revoke:
+    post:
+      tags: [Submissions]
+      summary: Withdraw consent
+      description: Subject or administrator may revoke. When the grant points at a published entity, that entity is archived. Revocation does not keep a copy of private profile fields.
+      parameters:
+        - name: consentId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Grant revoked.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, message]
+                properties:
+                  data:
+                    type: object
+                    required: [id]
+                    properties:
+                      id: { type: string, format: uuid }
+                  message: { type: string }
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/admin/submissions:
+    get:
+      tags: [Admin]
+      description: Administrator only. Proposed payloads are stripped of private self-description keys before they are shown.
+      parameters:
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/pageSize"
+        - name: status
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Moderation queue.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminSubmissionPage"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/admin/submissions/{id}/approve:
+    post:
+      tags: [Admin]
+      description: Publishes the submission, or both halves of a mirror batch. Returns 409 CONSENT_REQUIRED when any requirement is unsatisfied. Returns 409 CONFLICT when baseVersion is stale. Does not write partial mirror pairs.
+      parameters:
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: Published ids.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, message]
+                properties:
+                  data:
+                    type: object
+                    required: [publishedIds]
+                    properties:
+                      publishedIds:
+                        type: array
+                        items: { type: string, format: uuid }
+                  message: { type: string }
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/admin/submissions/{id}/reject:
+    post:
+      tags: [Admin]
+      description: Deletes the submission and consent rows that exist only for it. The reason is not stored with the content.
+      parameters:
+        - $ref: "#/components/parameters/id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, message]
+                properties:
+                  data:
+                    type: object
+                    required: [deleted]
+                    properties:
+                      deleted: { type: boolean, const: true }
+                  message: { type: string }
+  /api/admin/evidence:
+    post:
+      tags: [Admin]
+      description: Publishes evidence immediately. URLs must be HTTPS. Does not create a submission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [summary, evidenceDate]
+              properties:
+                summary: { type: string }
+                evidenceDate: { type: string, format: date }
+                urls:
+                  type: array
+                  items: { type: string }
+      responses:
+        "200":
+          description: Published evidence.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceMutation"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+  /api/admin/evidence/{id}:
+    patch:
+      tags: [Admin]
+      description: Updates the summary, date, or HTTPS links of a published evidence record.
+      parameters:
+        - $ref: "#/components/parameters/id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                summary: { type: string }
+                evidenceDate: { type: string, format: date }
+                urls:
+                  type: array
+                  items: { type: string }
+      responses:
+        "200":
+          description: Updated evidence.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceMutation"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+  /api/admin/evidence/{id}/archive:
+    post:
+      tags: [Admin]
+      description: Archives the evidence record. It is not deleted.
+      parameters:
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: Archived evidence.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdMutation"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/admin/evidence/{id}/verify:
+    post:
+      tags: [Admin]
+      parameters:
+        - $ref: "#/components/parameters/id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [verificationStatus, reliabilityScore]
+              properties:
+                verificationStatus: { $ref: "#/components/schemas/VerificationStatus" }
+                reliabilityScore: { type: [integer, "null"], minimum: 1, maximum: 5 }
+      responses:
+        "200":
+          description: Updated evidence.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceMutation"
+  /api/admin/groups:
+    post:
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, description]
+              properties:
+                name: { type: string }
+                description: { type: string }
+      responses:
+        "200":
+          description: Created group.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupMutation"
+  /api/admin/groups/{id}:
+    patch:
+      tags: [Admin]
+      parameters:
+        - $ref: "#/components/parameters/id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string }
+                status: { $ref: "#/components/schemas/RecordStatus" }
+                baseVersion: { type: integer, description: When present, must match the published version or the server returns 409. }
+      responses:
+        "200":
+          description: Updated group and a new version history row.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupMutation"
+  /api/admin/categories:
+    post:
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, description]
+              properties:
+                name: { type: string }
+                description: { type: string }
+      responses:
+        "200":
+          description: Created trait category.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CategoryMutation"
+  /api/admin/categories/{id}:
+    patch:
+      tags: [Admin]
+      parameters:
+        - $ref: "#/components/parameters/id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string }
+                isActive: { type: boolean }
+      responses:
+        "200":
+          description: Updated category.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CategoryMutation"
+  /api/admin/relationship-types:
+    post:
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, description, category]
+              properties:
+                name: { type: string }
+                description: { type: string }
+                category: { type: string }
+      responses:
+        "200":
+          description: Created relationship type.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RelationshipTypeMutation"
+  /api/admin/relationship-types/{id}:
+    patch:
+      tags: [Admin]
+      parameters:
+        - $ref: "#/components/parameters/id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string }
+                category: { type: string }
+                isActive: { type: boolean }
+      responses:
+        "200":
+          description: Updated relationship type.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RelationshipTypeMutation"
+  /api/admin/group-roles:
+    post:
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, description]
+              properties:
+                name: { type: string }
+                description: { type: string }
+      responses:
+        "200":
+          description: Created membership role.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupRoleMutation"
+  /api/admin/group-roles/{id}:
+    patch:
+      tags: [Admin]
+      parameters:
+        - $ref: "#/components/parameters/id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string }
+                isActive: { type: boolean }
+      responses:
+        "200":
+          description: Updated role.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupRoleMutation"
+  /api/admin/profile-matches/{userId}/correct:
+    post:
+      tags: [Admin]
+      summary: Correct an account-to-student match
+      description: Uses an explicit student id. The server must not infer a match from display names. Previous sessions for that user are invalidated.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [matchedStudentId, matchStatus, reason]
+              properties:
+                matchedStudentId: { type: [string, "null"], format: uuid }
+                matchStatus: { $ref: "#/components/schemas/MatchStatus" }
+                reason: { type: string, minLength: 8, maxLength: 500 }
+      responses:
+        "200":
+          description: Updated account. Caller must refresh `/api/auth/me` if it corrected itself.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, message]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/UserAccount"
+                  message: { type: string }
+  /api/admin/students:
+    post:
+      tags: [Admin]
+      description: Publishes a student immediately. Does not create a submission. Private self-description is not accepted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [displayName, graduationYear]
+              properties:
+                displayName: { type: string }
+                graduationYear: { type: integer, minimum: 1900, maximum: 2200 }
+                generalComment: { type: string }
+      responses:
+        "200":
+          description: Published student.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudentMutation"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+  /api/admin/students/{id}:
+    patch:
+      tags: [Admin]
+      description: Publishes a new student version immediately. When baseVersion is sent and does not match, nothing is written.
+      parameters:
+        - $ref: "#/components/parameters/id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                displayName: { type: string }
+                graduationYear: { type: integer }
+                generalComment: { type: string }
+                baseVersion: { type: integer }
+      responses:
+        "200":
+          description: New published version. Private profile is not a field of this body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudentMutation"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+  /api/admin/students/{id}/archive:
+    post:
+      tags: [Admin]
+      parameters:
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: Student archived. Linked evidence remains.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdMutation"
+  /api/admin/memberships:
+    post:
+      tags: [Admin]
+      description: Publishes a group membership immediately. Does not create a submission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [groupId, studentId, roleId, startDate]
+              properties:
+                groupId: { type: string, format: uuid }
+                studentId: { type: string, format: uuid }
+                roleId: { type: string, format: uuid }
+                startDate: { type: string, format: date }
+                endDate: { type: [string, "null"], format: date }
+      responses:
+        "200":
+          description: Published membership.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MembershipMutation"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+  /api/admin/memberships/{id}:
+    patch:
+      tags: [Admin]
+      description: Ends a membership by setting endDate. The row stays as history and is not deleted.
+      parameters:
+        - $ref: "#/components/parameters/id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endDate]
+              properties:
+                endDate: { type: string, format: date }
+      responses:
+        "200":
+          description: Membership ended. The same id remains.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MembershipMutation"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+  /api/admin/relationships:
+    post:
+      tags: [Admin]
+      description: |
+        Publishes a relationship immediately when consent is already satisfied. A student endpoint without consent returns 409 CONSENT_REQUIRED and writes nothing.
+        `createMirroredRelationship: true` writes both directions in one transaction as two ids. If either direction lacks consent, neither is written.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRelationship"
+      responses:
+        "200":
+          description: One published relationship, or two when a mirror was requested.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RelationshipPublishResult"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+  /api/admin/relationships/{id}/archive:
+    post:
+      tags: [Admin]
+      description: Archives one direction. A mirror, if present, is a different id and stays until archived on its own.
+      parameters:
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: Archived.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdMutation"
+  /api/admin/traits:
+    post:
+      tags: [Admin]
+      description: Publishes a trait immediately and can attach existing evidence ids. Does not create a submission. Shared evidence is a separate record.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [studentId, title, categoryId]
+              properties:
+                studentId: { type: string, format: uuid }
+                title: { type: string }
+                categoryId: { type: string, format: uuid }
+                description: { type: [string, "null"] }
+                evidenceIds:
+                  type: array
+                  items: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Published trait.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TraitMutation"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+  /api/admin/traits/{id}:
+    patch:
+      tags: [Admin]
+      description: Publishes a new trait version. baseVersion must match the current version.
+      parameters:
+        - $ref: "#/components/parameters/id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [baseVersion]
+              properties:
+                title: { type: string }
+                categoryId: { type: string, format: uuid }
+                description: { type: [string, "null"] }
+                baseVersion: { type: integer }
+      responses:
+        "200":
+          description: Updated trait. Previous revisions remain.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TraitMutation"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+  /api/admin/traits/{id}/archive:
+    post:
+      tags: [Admin]
+      description: Archives the trait and its trait-evidence links. Shared evidence rows are not deleted.
+      parameters:
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          description: Archived trait.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdMutation"
+  /api/admin/accounts:
+    get:
+      tags: [Admin]
+      responses:
+        "200":
+          description: Accounts for match correction. Passwords are never returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountPage"
+  /api/admin/administrators:
+    post:
+      tags: [Admin]
+      summary: Create another administrator
+      description: |
+        Creates an additional administrator. The email must use the configured school domain. The password must be at least 12 characters and is stored only as an argon2id hash. The response omits the password and the hash.
+        If the email already belongs to any account, the server returns 409 and does not change that account's role. This route does not promote a member, and it does not demote, delete, or reset passwords.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 12, format: password }
+      responses:
+        "200":
+          description: Created administrator. The password and password hash are omitted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountMutation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: An account with this email already exists. The existing role is unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "422":
+          $ref: "#/components/responses/Validation"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: bow_session
+      description: httpOnly SameSite=Lax session cookie. Cookie-only mutations require X-CSRF-Token. Bearer requests do not.
+  parameters:
+    id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    q:
+      name: q
+      in: query
+      schema: { type: string }
+    page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    pageSize:
+      name: pageSize
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+  responses:
+    Unauthorized:
+      description: Authentication required.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    Forbidden:
+      description: Authenticated but not allowed. Admin role does not grant private-profile access.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    NotFound:
+      description: Record not visible or missing.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    Validation:
+      description: Schema rejection.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    Conflict:
+      description: Stale version or missing consent. `code` is CONFLICT or CONSENT_REQUIRED.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    RateLimited:
+      description: Submission or search ceiling exceeded.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+  schemas:
+    ApiError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [VALIDATION, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, CONFLICT, CONSENT_REQUIRED, RATE_LIMITED, NETWORK, INTERNAL]
+        message: { type: string }
+        fieldErrors:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: string }
+        details:
+          type: object
+          additionalProperties: true
+    PaginationMeta:
+      type: object
+      required: [page, pageSize, total, totalPages]
+      properties:
+        page: { type: integer }
+        pageSize: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8 }
+    SessionInfo:
+      type: object
+      required: [authenticated, expiresAt]
+      properties:
+        authenticated: { type: boolean }
+        expiresAt: { type: [string, "null"], format: date-time }
+        csrfToken: { type: [string, "null"] }
+    UserRole:
+      type: string
+      enum: [member, administrator]
+    MatchStatus:
+      type: string
+      enum: [pending, verified, disputed, corrected]
+    RecordStatus:
+      type: string
+      enum: [active, archived]
+    RelationshipStatus:
+      type: string
+      enum: [active, ended, archived]
+    EndpointType:
+      type: string
+      enum: [student, group]
+    VerificationStatus:
+      type: string
+      enum: [pending, verified, insufficient, disputed]
+    SubmissionStatus:
+      type: string
+      enum: [pending, awaiting_consent, approved, rejected]
+    EntityType:
+      type: string
+      enum: [student, trait, evidence, group, group_membership, group_role, relationship, trait_category, relationship_type]
+    UserAccount:
+      type: object
+      required: [id, email, emailVerified, role, matchedStudentId, matchStatus, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        emailVerified: { type: boolean }
+        role: { $ref: "#/components/schemas/UserRole" }
+        matchedStudentId: { type: [string, "null"], format: uuid }
+        matchStatus: { $ref: "#/components/schemas/MatchStatus" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    AuthUser:
+      type: object
+      required: [account, matchedStudent, permissions]
+      properties:
+        account: { $ref: "#/components/schemas/UserAccount" }
+        matchedStudent: { oneOf: [{ $ref: "#/components/schemas/Student" }, { type: "null" }] }
+        permissions:
+          type: array
+          items: { type: string }
+    AuthMutation:
+      type: object
+      required: [data, message, csrfToken, expiresAt]
+      properties:
+        data: { $ref: "#/components/schemas/AuthUser" }
+        message: { type: string }
+        csrfToken: { type: string }
+        expiresAt: { type: string, format: date-time }
+    Student:
+      type: object
+      required: [id, displayName, graduationYear, generalComment, archivedAt, currentVersion, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        displayName: { type: string }
+        graduationYear: { type: integer }
+        generalComment: { type: string }
+        archivedAt: { type: [string, "null"], format: date-time }
+        currentVersion: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    StudentDetail:
+      allOf:
+        - $ref: "#/components/schemas/Student"
+        - type: object
+          required: [traits, memberships, relationships]
+          properties:
+            traits:
+              type: array
+              items: { $ref: "#/components/schemas/Trait" }
+            memberships:
+              type: array
+              items: { type: object }
+            relationships:
+              type: array
+              items: { $ref: "#/components/schemas/Relationship" }
+    StudentPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Student" }
+        meta: { $ref: "#/components/schemas/PaginationMeta" }
+    StudentPrivateProfile:
+      type: object
+      required: [studentId, sexualityPreset, sexualityCustom, updatedAt]
+      properties:
+        studentId: { type: string, format: uuid }
+        sexualityPreset:
+          type: [string, "null"]
+          enum: [prefer_not_to_say, heterosexual, gay, lesbian, bisexual, asexual, questioning, other, null]
+        sexualityCustom: { type: [string, "null"] }
+        updatedAt: { type: string, format: date-time }
+    PrivateProfilePatch:
+      type: object
+      required: [sexualityPreset]
+      properties:
+        sexualityPreset:
+          type: [string, "null"]
+          enum: [prefer_not_to_say, heterosexual, gay, lesbian, bisexual, asexual, questioning, other, null]
+        sexualityCustom: { type: [string, "null"] }
+    PrivateProfileMutation:
+      type: object
+      required: [data, message]
+      properties:
+        data: { $ref: "#/components/schemas/StudentPrivateProfile" }
+        message: { type: string }
+    TraitCategory:
+      type: object
+      required: [id, name, description, isActive, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        isActive: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    Trait:
+      type: object
+      required: [id, studentId, title, categoryId, description, status, currentVersion, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        studentId: { type: string, format: uuid }
+        title: { type: string }
+        categoryId: { type: string, format: uuid }
+        description: { type: [string, "null"] }
+        status: { $ref: "#/components/schemas/RecordStatus" }
+        currentVersion: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    TraitDetail:
+      allOf:
+        - $ref: "#/components/schemas/Trait"
+        - type: object
+          properties:
+            student: { $ref: "#/components/schemas/Student" }
+            category: { $ref: "#/components/schemas/TraitCategory" }
+            evidence:
+              type: array
+              items: { type: object }
+            history:
+              type: array
+              items: { $ref: "#/components/schemas/VersionHistoryEntry" }
+    TraitPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/TraitDetail" }
+        meta: { $ref: "#/components/schemas/PaginationMeta" }
+    Evidence:
+      type: object
+      required: [id, summary, evidenceDate, urls, attachments, verificationStatus, reliabilityScore, status, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        providerUserId: { type: string, description: Real id for administrators, otherwise "redacted". }
+        summary: { type: string }
+        evidenceDate: { type: string, format: date }
+        urls:
+          type: array
+          items: { type: string, format: uri }
+        attachments:
+          type: array
+          items:
+            type: object
+            required: [id, fileName, contentType, sizeBytes, authorized]
+            properties:
+              id: { type: string, format: uuid }
+              fileName: { type: string }
+              contentType: { type: string }
+              sizeBytes: { type: integer }
+              authorized: { type: boolean }
+        verificationStatus: { $ref: "#/components/schemas/VerificationStatus" }
+        reliabilityScore: { type: [integer, "null"] }
+        status: { $ref: "#/components/schemas/RecordStatus" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    EvidenceDetail:
+      allOf:
+        - $ref: "#/components/schemas/Evidence"
+        - type: object
+          required: [providerVisible, providerLabel]
+          properties:
+            providerVisible: { type: boolean }
+            providerLabel: { type: string }
+    EvidencePage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Evidence" }
+        meta: { $ref: "#/components/schemas/PaginationMeta" }
+    EvidenceMutation:
+      type: object
+      required: [data, message]
+      properties:
+        data: { $ref: "#/components/schemas/Evidence" }
+        message: { type: string }
+    AttachmentUploadAuthorization:
+      type: object
+      required: [uploadToken, expiresAt, url, method]
+      properties:
+        uploadToken: { type: string }
+        expiresAt: { type: string, format: date-time }
+        url: { type: string }
+        method: { type: string, const: PUT }
+    Group:
+      type: object
+      required: [id, name, description, currentVersion, status, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        currentVersion: { type: integer }
+        status: { $ref: "#/components/schemas/RecordStatus" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    GroupRole:
+      type: object
+      required: [id, name, description, isActive, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        isActive: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    GroupDetail:
+      allOf:
+        - $ref: "#/components/schemas/Group"
+        - type: object
+          properties:
+            currentMembers: { type: array, items: { type: object } }
+            historicalMembers: { type: array, items: { type: object } }
+            relationships: { type: array, items: { $ref: "#/components/schemas/Relationship" } }
+            history: { type: array, items: { $ref: "#/components/schemas/VersionHistoryEntry" } }
+    GroupPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Group" }
+        meta: { $ref: "#/components/schemas/PaginationMeta" }
+    GroupMutation:
+      type: object
+      required: [data, message]
+      properties:
+        data: { $ref: "#/components/schemas/Group" }
+        message: { type: string }
+    CategoryMutation:
+      type: object
+      required: [data, message]
+      properties:
+        data: { $ref: "#/components/schemas/TraitCategory" }
+        message: { type: string }
+    GroupRoleMutation:
+      type: object
+      required: [data, message]
+      properties:
+        data: { $ref: "#/components/schemas/GroupRole" }
+        message: { type: string }
+    MembershipPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data: { type: array, items: { type: object } }
+        meta: { $ref: "#/components/schemas/PaginationMeta" }
+    RelationshipType:
+      type: object
+      required: [id, name, description, category, isActive, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        category: { type: string }
+        isActive: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    RelationshipTypeMutation:
+      type: object
+      required: [data, message]
+      properties:
+        data: { $ref: "#/components/schemas/RelationshipType" }
+        message: { type: string }
+    Relationship:
+      type: object
+      required: [id, sourceType, sourceId, targetType, targetId, relationshipTypeId, generalComment, startDate, endDate, status, currentVersion, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        sourceType: { $ref: "#/components/schemas/EndpointType" }
+        sourceId: { type: string, format: uuid }
+        targetType: { $ref: "#/components/schemas/EndpointType" }
+        targetId: { type: string, format: uuid }
+        relationshipTypeId: { type: string, format: uuid }
+        generalComment: { type: string }
+        startDate: { type: [string, "null"] }
+        endDate: { type: [string, "null"] }
+        status: { $ref: "#/components/schemas/RelationshipStatus" }
+        currentVersion: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    RelationshipDetail:
+      allOf:
+        - $ref: "#/components/schemas/Relationship"
+        - type: object
+          properties:
+            sourceLabel: { type: string }
+            targetLabel: { type: string }
+            relationshipType: { $ref: "#/components/schemas/RelationshipType" }
+            history: { type: array, items: { $ref: "#/components/schemas/VersionHistoryEntry" } }
+            consent: { type: array, items: { type: object } }
+    RelationshipPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/RelationshipDetail" }
+        meta: { $ref: "#/components/schemas/PaginationMeta" }
+    VersionHistoryEntry:
+      type: object
+      required: [id, entityType, entityId, version, previousValues, newValues, changedAt, effectiveDate, changedByUserId]
+      properties:
+        id: { type: string, format: uuid }
+        entityType: { $ref: "#/components/schemas/EntityType" }
+        entityId: { type: string, format: uuid }
+        version: { type: integer }
+        previousValues: { type: object }
+        newValues: { type: object }
+        changedAt: { type: string, format: date-time }
+        effectiveDate: { type: [string, "null"] }
+        changedByUserId: { type: string, format: uuid }
+    ConsentRequirement:
+      type: object
+      required: [subjectStudentId, scope, satisfied]
+      properties:
+        subjectStudentId: { type: string, format: uuid }
+        scope: { type: string }
+        satisfied: { type: boolean }
+    Submission:
+      type: object
+      required: [id, submitterUserId, entityType, operation, targetEntityId, proposedData, status, submittedAt, reviewedAt, reviewedBy, consentRequirements, baseVersion]
+      properties:
+        id: { type: string, format: uuid }
+        submitterUserId: { type: string, format: uuid }
+        entityType: { $ref: "#/components/schemas/EntityType" }
+        operation: { type: string, enum: [create, update, archive, correction] }
+        targetEntityId: { type: [string, "null"], format: uuid }
+        proposedData: { type: object, description: Must not contain private self-description keys in responses. }
+        status: { $ref: "#/components/schemas/SubmissionStatus" }
+        submittedAt: { type: string, format: date-time }
+        reviewedAt: { type: [string, "null"], format: date-time }
+        reviewedBy: { type: [string, "null"], format: uuid }
+        consentRequirements:
+          type: array
+          items: { $ref: "#/components/schemas/ConsentRequirement" }
+        baseVersion: { type: [integer, "null"] }
+    SubmissionPublic:
+      type: object
+      required: [id, entityType, operation, status, anonymous]
+      properties:
+        id: { type: string, format: uuid }
+        entityType: { $ref: "#/components/schemas/EntityType" }
+        operation: { type: string }
+        status: { $ref: "#/components/schemas/SubmissionStatus" }
+        submittedAt: { type: string, format: date-time }
+        anonymous: { type: boolean, const: true }
+        consentRequirements:
+          type: array
+          items: { $ref: "#/components/schemas/ConsentRequirement" }
+    SubmissionPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/SubmissionPublic" }
+        meta: { $ref: "#/components/schemas/PaginationMeta" }
+    AdminSubmissionPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/Submission"
+              - type: object
+                required: [submitterEmail]
+                properties:
+                  submitterEmail: { type: string }
+        meta: { $ref: "#/components/schemas/PaginationMeta" }
+    CreateSubmission:
+      type: object
+      required: [entityType, operation, proposedData]
+      properties:
+        entityType: { $ref: "#/components/schemas/EntityType" }
+        operation: { type: string, enum: [create, update, archive, correction] }
+        targetEntityId: { type: [string, "null"], format: uuid }
+        proposedData: { type: object }
+        baseVersion: { type: [integer, "null"] }
+    CreateRelationship:
+      type: object
+      required: [sourceType, sourceId, targetType, targetId, relationshipTypeId, generalComment]
+      properties:
+        sourceType: { $ref: "#/components/schemas/EndpointType" }
+        sourceId: { type: string, format: uuid }
+        targetType: { $ref: "#/components/schemas/EndpointType" }
+        targetId: { type: string, format: uuid }
+        relationshipTypeId: { type: string, format: uuid }
+        generalComment: { type: string }
+        startDate: { type: [string, "null"] }
+        endDate: { type: [string, "null"] }
+        createMirroredRelationship: { type: boolean, default: false }
+    SubmissionMutation:
+      type: object
+      required: [data, message]
+      properties:
+        data:
+          oneOf:
+            - $ref: "#/components/schemas/Submission"
+            - type: array
+              minItems: 2
+              maxItems: 2
+              items: { $ref: "#/components/schemas/Submission" }
+        message: { type: string }
+    SearchHit:
+      type: object
+      required: [entityType, id, title, subtitle, href]
+      properties:
+        entityType: { $ref: "#/components/schemas/EntityType" }
+        id: { type: string, format: uuid }
+        title: { type: string }
+        subtitle: { type: string }
+        href: { type: string }
+    SearchPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/SearchHit" }
+        meta: { $ref: "#/components/schemas/PaginationMeta" }
+    GraphNode:
+      type: object
+      required: [id, type, label]
+      properties:
+        id: { type: string, description: "Prefixed key student:{uuid} or group:{uuid}." }
+        type: { $ref: "#/components/schemas/EndpointType" }
+        label: { type: string }
+        graduationYear: { type: integer }
+        status: { type: string }
+    GraphEdge:
+      type: object
+      required: [id, source, target, relationshipTypeId, relationshipTypeName, status, directed]
+      properties:
+        id: { type: string, format: uuid }
+        source: { type: string }
+        target: { type: string }
+        relationshipTypeId: { type: string, format: uuid }
+        relationshipTypeName: { type: string }
+        status: { $ref: "#/components/schemas/RelationshipStatus" }
+        directed: { type: boolean, const: true }
+    GraphNeighborhood:
+      type: object
+      required: [nodes, edges]
+      properties:
+        nodes:
+          type: array
+          items: { $ref: "#/components/schemas/GraphNode" }
+        edges:
+          type: array
+          items: { $ref: "#/components/schemas/GraphEdge" }
+    DashboardStats:
+      type: object
+      required: [students, groups, traits, evidence, relationships]
+      properties:
+        students: { type: integer }
+        groups: { type: integer }
+        traits: { type: integer }
+        evidence: { type: integer }
+        relationships: { type: integer }
+    RecentUpdate:
+      type: object
+      required: [id, entityType, title, href, occurredAt]
+      properties:
+        id: { type: string }
+        entityType: { $ref: "#/components/schemas/EntityType" }
+        title: { type: string }
+        href: { type: string }
+        occurredAt: { type: string, format: date-time }
+    AccountPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/UserAccount" }
+        meta: { $ref: "#/components/schemas/PaginationMeta" }
+    AccountMutation:
+      type: object
+      required: [data, message]
+      properties:
+        data: { $ref: "#/components/schemas/UserAccount" }
+        message: { type: string }
+    IdMutation:
+      type: object
+      required: [data, message]
+      properties:
+        data:
+          type: object
+          required: [id]
+          properties:
+            id: { type: string, format: uuid }
+        message: { type: string }
+    StudentMutation:
+      type: object
+      required: [data, message]
+      properties:
+        data:
+          $ref: "#/components/schemas/StudentDetail"
+        message: { type: string }
+    TraitMutation:
+      type: object
+      required: [data, message]
+      properties:
+        data:
+          $ref: "#/components/schemas/TraitDetail"
+        message: { type: string }
+    GroupMembership:
+      type: object
+      required: [id, groupId, studentId, roleId, startDate, endDate, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        groupId: { type: string, format: uuid }
+        studentId: { type: string, format: uuid }
+        roleId: { type: string, format: uuid }
+        startDate: { type: string, format: date }
+        endDate: { type: [string, "null"], format: date }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    MembershipMutation:
+      type: object
+      required: [data, message]
+      properties:
+        data:
+          $ref: "#/components/schemas/GroupMembership"
+        message: { type: string }
+    RelationshipPublishResult:
+      type: object
+      required: [data, message]
+      properties:
+        data:
+          oneOf:
+            - $ref: "#/components/schemas/RelationshipDetail"
+            - type: array
+              minItems: 2
+              maxItems: 2
+              items:
+                $ref: "#/components/schemas/RelationshipDetail"
+        message: { type: string }
