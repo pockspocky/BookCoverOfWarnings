@@ -36,13 +36,22 @@ function cookieSecure() {
   return raw === 'true'
 }
 
+function listedOrigins(name: string) {
+  return (process.env[name] ?? '')
+    .split(',')
+    .map((item) => item.trim().replace(/\/$/, ''))
+    .filter(Boolean)
+}
+
 export function loadEnv() {
   const deployed = deploymentOrigin()
   const apiPublicUrl = (process.env.API_PUBLIC_URL?.trim() || deployed || 'http://localhost:3001').replace(/\/$/, '')
+  const webOrigin = (process.env.WEB_ORIGIN?.trim() || deployed || 'http://localhost:3000').replace(/\/$/, '')
   const env = {
     databaseUrl: requireSecret('DATABASE_URL'),
     port: integer('PORT', 3001),
-    webOrigin: process.env.WEB_ORIGIN?.trim() || deployed || 'http://localhost:3000',
+    webOrigin,
+    webOrigins: Array.from(new Set([webOrigin, ...listedOrigins('WEB_ORIGINS')])),
     apiPublicUrl,
     schoolEmailDomain: process.env.SCHOOL_EMAIL_DOMAIN?.trim() || 'waprep.org',
     cookieSecure: cookieSecure(),

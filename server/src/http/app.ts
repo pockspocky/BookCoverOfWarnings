@@ -91,12 +91,14 @@ import {
 import { RateLimitError, fromZod } from './errors'
 import { parseQuery } from './query'
 import { newSecret } from '../auth/tokens'
+import { sessionCookieOptions } from './session-cookie'
 import { iso, newId, pageWindow } from '../util'
 
 export type AppDeps = {
   db: Database
   schoolEmailDomain: string
   webOrigin: string
+  webOrigins?: string[]
   cookieSecure: boolean
   sessionTtlHours: number
   submissionRateLimit: number
@@ -178,16 +180,24 @@ function institutionalFailure(
   return c.redirect(`${webOrigin}/login?error=institutional`)
 }
 
-function originsFor(origin: string) {
-  const values = new Set([origin])
-  if (origin.includes('localhost')) values.add(origin.replace('localhost', '127.0.0.1'))
-  if (origin.includes('127.0.0.1')) values.add(origin.replace('127.0.0.1', 'localhost'))
+function originsFor(origins: string[]) {
+  const values = new Set<string>()
+  for (const origin of origins) {
+    values.add(origin)
+    if (origin.includes('localhost')) values.add(origin.replace('localhost', '127.0.0.1'))
+    if (origin.includes('127.0.0.1')) values.add(origin.replace('127.0.0.1', 'localhost'))
+  }
   return values
+}
+
+function cookieOptions(deps: AppDeps, origin: string | undefined) {
+  const crossSite = Boolean(origin && origin !== deps.webOrigin && (deps.webOrigins ?? []).includes(origin))
+  return sessionCookieOptions(deps.cookieSecure, deps.sessionTtlHours * 60 * 60, crossSite)
 }
 
 export function createApp(deps: AppDeps) {
   const app = new Hono<AppEnv>()
-  const allowed = originsFor(deps.webOrigin)
+  const allowed = originsFor(deps.webOrigins?.length ? deps.webOrigins : [deps.webOrigin])
   app.use('*', cors({
     origin: (origin) => allowed.has(origin) ? origin : deps.webOrigin,
     credentials: true,
@@ -272,13 +282,7 @@ export function createApp(deps: AppDeps) {
 
   app.post('/api/auth/login', async (c) => {
     const result = await loginAccount(deps.db, deps.schoolEmailDomain, await c.req.json().catch(() => null), deps.sessionTtlHours)
-    setCookie(c, 'bow_session', result.token, {
-      httpOnly: true,
-      sameSite: 'Lax',
-      secure: deps.cookieSecure,
-      path: '/',
-      maxAge: deps.sessionTtlHours * 60 * 60
-    })
+    setCookie(c, 'bow_session', result.token, cookieOptions(deps, c.req.header('origin')))
     const anonymous = result.user.account.email === ANONYMOUS_ACCOUNT_EMAIL
     return c.json({
       data: result.user,
@@ -325,13 +329,7 @@ export function createApp(deps: AppDeps) {
         codeVerifier: pending.codeVerifier
       })
       const result = await loginWithVerifiedIdentity(deps.db, identity, deps.sessionTtlHours)
-      setCookie(c, 'bow_session', result.token, {
-        httpOnly: true,
-        sameSite: 'Lax',
-        secure: deps.cookieSecure,
-        path: '/',
-        maxAge: deps.sessionTtlHours * 60 * 60
-      })
+      setCookie(c, 'bow_session', result.token, cookieOptions(deps, c.req.header('origin')))
       return c.redirect(`${deps.webOrigin}${pending.nextPath}`)
     } catch {
       return institutionalFailure(c, deps.webOrigin, 401)
@@ -341,7 +339,7 @@ export function createApp(deps: AppDeps) {
   app.post('/api/auth/logout', async (c) => {
     const token = bearerToken(c.req.header('authorization')) ?? getCookie(c, 'bow_session') ?? null
     await logoutToken(deps.db, token)
-    deleteCookie(c, 'bow_session', { path: '/' })
+    deleteCookie(c, 'bow_session', cookieOptions(deps, c.req.header('origin')))
     return c.body(null, 204)
   })
 

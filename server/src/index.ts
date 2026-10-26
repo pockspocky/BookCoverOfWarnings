@@ -1,7 +1,7 @@
 import { serve } from '@hono/node-server'
 import { createIdentityProvider } from './auth/identity'
 import { createDatabase, createSql } from './db/client'
-import { migrateWithLock } from './db/migrate'
+import { migrate } from './db/migrate'
 import { loadDotEnv, loadEnv } from './env'
 import { createApp } from './http/app'
 import { createMetadataScanner, createS3Storage } from './services/storage'
@@ -11,7 +11,7 @@ const env = loadEnv()
 const sql = createSql(env.databaseUrl)
 const db = createDatabase(sql)
 
-await migrateWithLock(sql)
+await migrate(sql)
 const storage = createS3Storage(env)
 try {
   await storage.ensureBucket()
@@ -30,8 +30,9 @@ const identity = await createIdentityProvider({
 const app = createApp({
   db,
   schoolEmailDomain: env.schoolEmailDomain,
-  webOrigin: env.webOrigin,
-  cookieSecure: env.cookieSecure,
+      webOrigin: env.webOrigin,
+      webOrigins: env.webOrigins,
+      cookieSecure: env.cookieSecure,
   sessionTtlHours: env.sessionTtlHours,
   submissionRateLimit: env.submissionRateLimit,
   submissionWindowSeconds: env.submissionWindowSeconds,

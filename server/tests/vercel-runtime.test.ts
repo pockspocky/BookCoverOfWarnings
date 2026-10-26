@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createSql } from '../src/db/client'
 import { readDiskMigrations } from '../src/db/migrate'
 import { loadEnv } from '../src/env'
+import { sessionCookieOptions } from '../src/http/session-cookie'
 
 const KEYS = [
   'VERCEL',
   'VERCEL_URL',
   'WEB_ORIGIN',
+  'WEB_ORIGINS',
   'API_PUBLIC_URL',
   'COOKIE_SECURE',
   'DATABASE_URL',
@@ -65,6 +67,28 @@ describe('Vercel runtime defaults', () => {
     expect(env.webOrigin).toBe('https://warnings.example')
     expect(env.apiPublicUrl).toBe('https://api.example')
     expect(env.cookieSecure).toBe(false)
+  })
+
+  it('keeps the site origin and adds extra browser origins', () => {
+    useEnv({
+      VERCEL: '1',
+      VERCEL_URL: 'book-cover-of-warnings.vercel.app',
+      WEB_ORIGINS: 'https://pockspocky.github.io/, https://pockspocky.github.io'
+    })
+    const env = loadEnv()
+    expect(env.webOrigin).toBe('https://book-cover-of-warnings.vercel.app')
+    expect(env.webOrigins).toEqual([
+      'https://book-cover-of-warnings.vercel.app',
+      'https://pockspocky.github.io'
+    ])
+  })
+})
+
+describe('session cookie', () => {
+  it('keeps a lax cookie on the API site and partitions a cross-site browser', () => {
+    expect(sessionCookieOptions(true, 60, false)).toMatchObject({ sameSite: 'Lax', secure: true })
+    expect(sessionCookieOptions(true, 60, true)).toMatchObject({ sameSite: 'None', secure: true, partitioned: true })
+    expect(sessionCookieOptions(false, 60, false)).toMatchObject({ sameSite: 'Lax', secure: false })
   })
 })
 
