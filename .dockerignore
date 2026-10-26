@@ -1,0 +1,17 @@
+node_modules
+.nuxt
+.nitro
+.output
+.vercel
+dist
+coverage
+test-results
+playwright-report
+.git
+.cursor
+.env
+.env.*
+server/.env
+server/.env.*
+secrets
+*.log
