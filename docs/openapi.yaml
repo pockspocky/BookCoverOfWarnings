@@ -652,7 +652,7 @@ paths:
     get:
       tags: [Graph]
       summary: Neighborhood overview
-      description: Returns a bounded neighborhood, not the full database. Payload excludes private fields.
+      description: Returns every active student and group that matches the filters, with their relationships. Payload excludes private fields.
       parameters:
         - name: q
           in: query
@@ -1267,11 +1267,12 @@ paths:
           application/json:
             schema:
               type: object
-              required: [groupId, studentId, roleId, startDate]
+              required: [groupId, studentId, startDate]
               properties:
                 groupId: { type: string, format: uuid }
                 studentId: { type: string, format: uuid }
-                roleId: { type: string, format: uuid }
+                roleId: { type: string, format: uuid, description: Existing role id. Provide roleId or roleName. }
+                roleName: { type: string, maxLength: 200, description: Free-text role. A matching role name is reused; otherwise the role is created when the membership is published. }
                 startDate: { type: string, format: date }
                 endDate: { type: [string, "null"], format: date }
       responses:

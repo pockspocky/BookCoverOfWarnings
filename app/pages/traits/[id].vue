@@ -31,8 +31,8 @@
         · {{ item.verificationStatus }} · reliability {{ item.reliabilityScore ?? 'n/a' }}
       </li>
     </ul>
-    <div v-if="auth.isAdmin && trait.status === 'active'" class="mt-4 grid gap-4 border border-panel-border bg-panel p-4 md:grid-cols-2">
-      <form class="space-y-2" @submit.prevent="askAttach">
+    <div v-if="trait.status === 'active'" class="mt-4 space-y-4 border border-panel-border bg-panel p-4">
+      <form v-if="auth.isAdmin" class="space-y-2" @submit.prevent="askAttach">
         <h3 class="text-sm font-semibold">Attach existing evidence</h3>
         <label class="block text-sm">Evidence
           <select v-model="attachId" class="mt-1 w-full border border-panel-border bg-ink-950 px-2 py-1" required>
@@ -43,23 +43,25 @@
         <p v-if="attachError" class="text-sm text-red-300">{{ attachError }}</p>
         <button class="border border-accent px-3 py-1.5 text-sm text-accent" type="submit">Attach evidence</button>
       </form>
-      <form class="space-y-2" @submit.prevent="askCreateEvidence">
-        <h3 class="text-sm font-semibold">Publish evidence on this trait</h3>
-        <label class="block text-sm">Summary
-          <textarea v-model="evidenceForm.summary" class="mt-1 h-20 w-full border border-panel-border bg-ink-950 p-2" required />
-        </label>
-        <label class="block text-sm">Date
-          <input v-model="evidenceForm.evidenceDate" class="mt-1 w-full border border-panel-border bg-ink-950 px-2 py-1" type="date" required />
-        </label>
-        <label class="block text-sm">HTTPS link
-          <input v-model="evidenceForm.url" class="mt-1 w-full border border-panel-border bg-ink-950 px-2 py-1" type="url" placeholder="https://" />
-        </label>
-        <p v-if="evidenceError" class="text-sm text-red-300">{{ evidenceError }}</p>
-        <button class="bg-accent px-3 py-1.5 text-sm text-accent-fg" type="submit">Publish evidence</button>
-      </form>
+      <div>
+        <button class="border border-panel-border px-3 py-1.5 text-sm" type="button" :aria-expanded="showCreateEvidence" @click="showCreateEvidence = !showCreateEvidence">{{ auth.isAdmin ? 'Create evidence' : 'Submit evidence' }}</button>
+        <form v-if="showCreateEvidence" class="mt-3 space-y-2 border border-panel-border p-3" @submit.prevent="askCreateEvidence">
+          <h3 class="text-sm font-semibold">{{ auth.isAdmin ? 'New evidence for this trait' : 'Submit evidence for this trait' }}</h3>
+          <p class="text-xs text-ink-400">{{ auth.isAdmin ? 'Publishes immediately, attaches it here, and does not need verification. Reliability starts at 3 of 5.' : 'Queues a submission. After approval it is attached here and stays unverified until an administrator verifies it. Reliability starts at 3 of 5.' }}</p>
+          <label class="block text-sm">Summary
+            <textarea v-model="evidenceForm.summary" class="mt-1 h-20 w-full border border-panel-border bg-ink-950 p-2" required />
+          </label>
+          <label class="block text-sm">Date
+            <input v-model="evidenceForm.evidenceDate" class="mt-1 w-full border border-panel-border bg-ink-950 px-2 py-1" type="date" required />
+          </label>
+          <label class="block text-sm">HTTPS link
+            <input v-model="evidenceForm.url" class="mt-1 w-full border border-panel-border bg-ink-950 px-2 py-1" type="url" placeholder="https://" />
+          </label>
+          <p v-if="evidenceError" class="text-sm text-red-300">{{ evidenceError }}</p>
+          <button class="bg-accent px-3 py-1.5 text-sm text-accent-fg" type="submit">{{ auth.isAdmin ? 'Publish and attach' : 'Queue submission' }}</button>
+        </form>
+      </div>
     </div>
-    <h2 class="mb-2 mt-6 text-sm font-semibold uppercase tracking-wider text-ink-400">History</h2>
-    <TimelineList :items="trait.history" />
     <ConfirmDialog :open="dialog.open" :title="dialog.title" :message="dialog.message" :confirm-label="dialog.confirmLabel" @cancel="dialog.open = false" @confirm="confirmDialog" />
   </div>
 </template>
@@ -76,6 +78,7 @@ const categories = ref<Awaited<ReturnType<typeof $api.traits.categories>>>([])
 const evidenceRows = ref<Awaited<ReturnType<typeof $api.evidence.list>>['data']>([])
 const showEdit = ref(false)
 const draft = reactive({ title: '', categoryId: '', description: '' })
+const showCreateEvidence = ref(false)
 const evidenceForm = reactive({ summary: '', evidenceDate: '', url: '' })
 const attachId = ref('')
 const editError = ref('')
@@ -132,7 +135,7 @@ function askSave() {
 function askArchive() {
   dialog.action = 'archive'
   dialog.title = 'Archive trait?'
-  dialog.message = 'The trait is archived. Evidence shared with other traits stays published, and version history stays.'
+  dialog.message = 'The trait is archived. Evidence shared with other traits stays published.'
   dialog.confirmLabel = 'Archive trait'
   dialog.open = true
 }
@@ -153,9 +156,15 @@ function askCreateEvidence() {
     return
   }
   dialog.action = 'create-evidence'
-  dialog.title = 'Publish this evidence?'
-  dialog.message = 'This writes a published evidence record and links it to this trait. It does not enter the review queue.'
-  dialog.confirmLabel = 'Publish'
+  if (auth.isAdmin) {
+    dialog.title = 'Publish this evidence?'
+    dialog.message = 'This publishes the evidence immediately and links it to this trait. It does not need verification. Reliability starts at 3 of 5.'
+    dialog.confirmLabel = 'Publish'
+  } else {
+    dialog.title = 'Queue this evidence?'
+    dialog.message = 'This submits the evidence for review. After approval it is linked to this trait and stays unverified until an administrator verifies it.'
+    dialog.confirmLabel = 'Queue submission'
+  }
   dialog.open = true
 }
 
@@ -227,16 +236,31 @@ async function createEvidence() {
   }
   evidenceError.value = ''
   try {
-    await $api.admin.createEvidence({
-      summary: evidenceForm.summary,
-      evidenceDate: evidenceForm.evidenceDate,
-      urls,
-      traitIds: [trait.value.id]
-    })
+    if (auth.isAdmin) {
+      await $api.admin.createEvidence({
+        summary: evidenceForm.summary,
+        evidenceDate: evidenceForm.evidenceDate,
+        urls,
+        traitIds: [trait.value.id]
+      })
+      toasts.push('Evidence published and attached. Reliability starts at 3 of 5.', 'success')
+    } else {
+      await $api.submissions.create({
+        entityType: 'evidence',
+        operation: 'create',
+        proposedData: {
+          summary: evidenceForm.summary,
+          evidenceDate: evidenceForm.evidenceDate,
+          urls,
+          traitIds: [trait.value.id]
+        }
+      })
+      toasts.push('Evidence queued. It is attached after approval and still needs verification.', 'success')
+    }
     evidenceForm.summary = ''
     evidenceForm.evidenceDate = ''
     evidenceForm.url = ''
-    toasts.push('Evidence published.', 'success')
+    showCreateEvidence.value = false
     await load()
   } catch (err) {
     evidenceError.value = errorMessage(err)

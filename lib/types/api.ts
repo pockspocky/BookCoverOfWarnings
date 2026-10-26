@@ -145,7 +145,7 @@ export interface ApiClient {
     attachTraitEvidence(id: string, payload: { evidenceId: string }): Promise<MutationResult<TraitDetail>>
     patchEvidence(id: string, payload: { summary?: string; evidenceDate?: string; urls?: string[] }): Promise<MutationResult<Evidence>>
     archiveEvidence(id: string): Promise<MutationResult<{ id: string }>>
-    createMembership(payload: { groupId: string; studentId: string; roleId: string; startDate: string; endDate?: string | null }): Promise<MutationResult<GroupMembership>>
+    createMembership(payload: { groupId: string; studentId: string; roleId?: string; roleName?: string; startDate: string; endDate?: string | null }): Promise<MutationResult<GroupMembership>>
     patchMembership(id: string, payload: { endDate: string }): Promise<MutationResult<GroupMembership>>
     createRelationship(payload: CreateRelationshipPayload): Promise<MutationResult<RelationshipDetail | RelationshipDetail[]>>
     patchRelationship(id: string, payload: { generalComment?: string; startDate?: string | null; endDate?: string | null; status?: RelationshipStatus; baseVersion: number }): Promise<MutationResult<RelationshipDetail>>

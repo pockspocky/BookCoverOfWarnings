@@ -87,10 +87,8 @@ async function present(db: Database, refs: Ref[], edges: Awaited<ReturnType<type
 
 async function expand(db: Database, seeds: Ref[], depth: number, relationshipTypeId?: string) {
   const visited = new Map<string, Ref>()
-  for (const seed of seeds) {
-    if (visited.size >= nodeCap) break
-    visited.set(`${seed.type}:${seed.id}`, seed)
-  }
+  for (const seed of seeds) visited.set(`${seed.type}:${seed.id}`, seed)
+  const neighborCap = visited.size + nodeCap
   let frontier = [...visited.values()]
   const edges: Awaited<ReturnType<typeof edgesTouching>> = []
   for (let hop = 0; hop < depth; hop += 1) {
@@ -106,7 +104,7 @@ async function expand(db: Database, seeds: Ref[], depth: number, relationshipTyp
           ? { type: edge.targetType as EndpointType, id: edge.targetId }
           : { type: edge.sourceType as EndpointType, id: edge.sourceId }
         const key = `${other.type}:${other.id}`
-        if (!visited.has(key) && visited.size < nodeCap) {
+        if (!visited.has(key) && visited.size < neighborCap) {
           visited.set(key, other)
           next.push(other)
         }
@@ -135,14 +133,14 @@ export async function overview(db: Database, filters: { q?: string; nodeType?: E
     const rows = await db.select({ id: students.id }).from(students).where(and(
       isNull(students.archivedAt),
       filters.q ? sql`${students.displayName} ilike ${likePattern(filters.q)} escape '\\'` : undefined
-    )).orderBy(students.displayName).limit(filters.q ? 8 : 4)
+    )).orderBy(students.displayName)
     for (const row of rows) seeds.push({ type: 'student', id: row.id })
   }
   if (!filters.nodeType || filters.nodeType === 'group') {
     const rows = await db.select({ id: groups.id }).from(groups).where(and(
       eq(groups.status, 'active'),
       filters.q ? sql`${groups.name} ilike ${likePattern(filters.q)} escape '\\'` : undefined
-    )).orderBy(groups.name).limit(filters.q ? 8 : 2)
+    )).orderBy(groups.name)
     for (const row of rows) seeds.push({ type: 'group', id: row.id })
   }
   if (!seeds.length) return { nodes: [], edges: [] }

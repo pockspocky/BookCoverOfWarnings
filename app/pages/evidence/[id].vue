@@ -25,6 +25,7 @@
         </form>
         <form class="flex flex-wrap items-end gap-2 border border-panel-border bg-panel p-4" @submit.prevent="askVerify">
           <h2 class="w-full text-sm font-semibold">Verification</h2>
+          <p class="w-full text-xs text-ink-400">Administrator publications are already verified. Member submissions stay pending until you verify them. New records start at reliability 3 of 5.</p>
           <label class="text-sm">Status
             <select v-model="draft.verificationStatus" class="mt-1 block border border-panel-border bg-ink-950 px-2 py-1">
               <option value="pending">pending</option>
@@ -152,7 +153,7 @@ function askEdit() {
 function askArchive() {
   dialog.action = 'archive'
   dialog.title = 'Archive evidence?'
-  dialog.message = 'The evidence record is archived. It is not deleted, and traits that cited it keep their own history.'
+  dialog.message = 'The evidence record is archived. It is not deleted, and traits that cited it stay published.'
   dialog.confirmLabel = 'Archive'
   dialog.open = true
 }
