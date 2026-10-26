@@ -1,10 +1,11 @@
-import { and, eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import { createRelationshipSchema, httpsUrlSchema, markdownSchema, uuidSchema } from '../../../lib/schemas/index'
 import { ApiError } from '../../../lib/types/errors'
 import { EndpointType, RecordStatus, RelationshipStatus, type EntityType, type SubmissionOperation, type UserRole } from '../../../lib/types/enums'
 import type { Database } from '../db/client'
 import {
+  accounts,
   evidence,
   groupMemberships,
   groupRoles,
@@ -254,9 +255,13 @@ const groupChangeSchema = z.object({
 const membershipSchema = z.object({
   groupId: uuidSchema,
   studentId: uuidSchema,
-  roleId: uuidSchema,
+  roleId: uuidSchema.optional(),
+  roleName: z.string().min(1).max(200).optional(),
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional()
+}).refine((value) => Boolean(value.roleId || value.roleName?.trim()), {
+  message: 'A role is required.',
+  path: ['roleName']
 })
 
 const relationshipChangeSchema = z.object({
@@ -511,6 +516,13 @@ export const traitModule: EntityModule = {
   }
 }
 
+const baseReliability = 3
+
+async function publishedByAdministrator(db: Database, userId: string) {
+  const rows = await db.select({ role: accounts.role }).from(accounts).where(eq(accounts.id, userId)).limit(1)
+  return rows[0]?.role === 'administrator'
+}
+
 export const evidenceModule: EntityModule = {
   entityType: 'evidence',
   sensitiveKeys: ['sexualityPreset', 'sexualityCustom', 'providerUserId'],
@@ -534,14 +546,15 @@ export const evidenceModule: EntityModule = {
       const data = evidenceWriteSchema.parse(submission.proposedData)
       const id = newId()
       const now = new Date()
+      const administrator = await publishedByAdministrator(db, submission.submitterUserId)
       await db.insert(evidence).values({
         id,
         providerUserId: submission.submitterUserId,
         summary: data.summary,
         evidenceDate: data.evidenceDate,
         urls: data.urls,
-        verificationStatus: 'pending',
-        reliabilityScore: null,
+        verificationStatus: administrator ? 'verified' : 'pending',
+        reliabilityScore: baseReliability,
         status: 'active',
         createdAt: now,
         updatedAt: now
@@ -667,6 +680,19 @@ export async function patchGroup(db: Database, id: string, payload: { name?: str
   await projectGroup(db, id)
 }
 
+async function resolveMembershipRole(db: Database, data: { roleId?: string; roleName?: string }) {
+  if (data.roleId) {
+    const role = await db.select({ id: groupRoles.id }).from(groupRoles).where(eq(groupRoles.id, data.roleId)).limit(1)
+    if (!role[0]) throw ApiError.validation('Unknown role.', { roleId: ['Unknown role.'] })
+    return data.roleId
+  }
+  const name = data.roleName?.trim() ?? ''
+  if (!name) throw ApiError.validation('A role is required.', { roleName: ['A role is required.'] })
+  const existing = await db.select({ id: groupRoles.id }).from(groupRoles).where(sql`lower(${groupRoles.name}) = ${name.toLowerCase()}`).limit(1)
+  if (existing[0]) return existing[0].id
+  return insertGroupRole(db, { name, description: '' })
+}
+
 export const membershipModule: EntityModule = {
   entityType: 'group_membership',
   sensitiveKeys: [],
@@ -686,15 +712,14 @@ export const membershipModule: EntityModule = {
     await requireStudent(db, data.studentId)
     const group = await db.select({ id: groups.id }).from(groups).where(eq(groups.id, data.groupId)).limit(1)
     if (!group[0]) throw ApiError.validation('Unknown group.', { groupId: ['Unknown group.'] })
-    const role = await db.select({ id: groupRoles.id }).from(groupRoles).where(eq(groupRoles.id, data.roleId)).limit(1)
-    if (!role[0]) throw ApiError.validation('Unknown role.', { roleId: ['Unknown role.'] })
+    const roleId = await resolveMembershipRole(db, data)
     const id = newId()
     const now = new Date()
     await db.insert(groupMemberships).values({
       id,
       groupId: data.groupId,
       studentId: data.studentId,
-      roleId: data.roleId,
+      roleId,
       startDate: data.startDate,
       endDate: data.endDate ?? null,
       createdAt: now,

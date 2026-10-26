@@ -1,10 +1,11 @@
 <template>
   <div>
     <PageHeader title="Evidence" kicker="Directory">
-      <button v-if="auth.isAdmin" class="bg-accent px-3 py-1.5 text-sm text-accent-fg" type="button" @click="showCreate = !showCreate">Add evidence</button>
+      <button class="bg-accent px-3 py-1.5 text-sm text-accent-fg" type="button" @click="showCreate = !showCreate">{{ auth.isAdmin ? 'Add evidence' : 'Submit evidence' }}</button>
     </PageHeader>
-    <form v-if="auth.isAdmin && showCreate" class="mb-6 grid gap-2 border border-panel-border bg-panel p-4 md:grid-cols-2" @submit.prevent="askCreate">
-      <h2 class="font-semibold md:col-span-2">Publish evidence</h2>
+    <form v-if="showCreate" class="mb-6 grid gap-2 border border-panel-border bg-panel p-4 md:grid-cols-2" @submit.prevent="askCreate">
+      <h2 class="font-semibold md:col-span-2">{{ auth.isAdmin ? 'Publish evidence' : 'Submit evidence for verification' }}</h2>
+      <p class="text-xs text-ink-400 md:col-span-2">{{ auth.isAdmin ? 'This is published immediately and does not need verification. Reliability starts at 3 of 5.' : 'An administrator must approve this before it is published. It stays unverified until an administrator verifies it. Reliability starts at 3 of 5.' }}</p>
       <label class="text-sm md:col-span-2">Summary
         <textarea v-model="createForm.summary" class="mt-1 h-20 w-full border border-panel-border bg-ink-950 p-2" required />
       </label>
@@ -15,7 +16,7 @@
         <input v-model="createForm.url" class="mt-1 w-full border border-panel-border bg-ink-950 px-2 py-1" type="url" placeholder="https://" />
       </label>
       <p v-if="createError" class="text-sm text-red-300 md:col-span-2">{{ createError }}</p>
-      <button class="w-fit bg-accent px-3 py-1.5 text-sm text-accent-fg" type="submit">Publish evidence</button>
+      <button class="w-fit bg-accent px-3 py-1.5 text-sm text-accent-fg" type="submit">{{ auth.isAdmin ? 'Publish evidence' : 'Queue submission' }}</button>
     </form>
     <form class="mb-4 flex flex-wrap gap-3" @submit.prevent="load">
       <input v-model="q" class="border border-panel-border bg-panel px-3 py-2 text-sm" placeholder="Summary" />
@@ -63,7 +64,7 @@ const meta = ref<Awaited<ReturnType<typeof $api.evidence.list>>['meta'] | null>(
 const showCreate = ref(false)
 const createForm = reactive({ summary: '', evidenceDate: '', url: '' })
 const createError = ref('')
-const dialog = reactive({ open: false, title: 'Publish this evidence?', message: 'This writes a published evidence record immediately. It does not enter the review queue.', confirmLabel: 'Publish' })
+const dialog = reactive({ open: false, title: '', message: '', confirmLabel: 'Confirm' })
 const saving = ref(false)
 useUnsavedGuard(computed(() => Boolean(createForm.summary || createForm.evidenceDate || createForm.url)))
 
@@ -93,6 +94,15 @@ function askCreate() {
     createError.value = 'urls: Only HTTPS URLs are permitted.'
     return
   }
+  if (auth.isAdmin) {
+    dialog.title = 'Publish this evidence?'
+    dialog.message = 'This publishes the evidence immediately. It does not need verification. Reliability starts at 3 of 5.'
+    dialog.confirmLabel = 'Publish'
+  } else {
+    dialog.title = 'Queue this evidence?'
+    dialog.message = 'This submits the evidence for review. It is not published until an administrator approves it, and it stays unverified until an administrator verifies it.'
+    dialog.confirmLabel = 'Queue submission'
+  }
   dialog.open = true
 }
 
@@ -108,16 +118,29 @@ async function confirmCreate() {
   }
   createError.value = ''
   try {
-    await $api.admin.createEvidence({
-      summary: createForm.summary,
-      evidenceDate: createForm.evidenceDate,
-      urls
-    })
+    if (auth.isAdmin) {
+      await $api.admin.createEvidence({
+        summary: createForm.summary,
+        evidenceDate: createForm.evidenceDate,
+        urls
+      })
+      toasts.push('Evidence published. Reliability starts at 3 of 5.', 'success')
+    } else {
+      await $api.submissions.create({
+        entityType: 'evidence',
+        operation: 'create',
+        proposedData: {
+          summary: createForm.summary,
+          evidenceDate: createForm.evidenceDate,
+          urls
+        }
+      })
+      toasts.push('Evidence queued. An administrator must approve and verify it.', 'success')
+    }
     createForm.summary = ''
     createForm.evidenceDate = ''
     createForm.url = ''
     showCreate.value = false
-    toasts.push('Evidence published.', 'success')
     await load()
   } catch (err) {
     createError.value = errorMessage(err)

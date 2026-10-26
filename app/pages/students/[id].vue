@@ -57,11 +57,6 @@
               </li>
             </ul>
           </div>
-          <div class="border border-panel-border bg-panel p-4">
-            <h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-ink-400">Version history</h2>
-            <TimelineList v-if="history.length" :items="history" />
-            <p v-else class="text-sm text-ink-400">No published revisions beyond the original record.</p>
-          </div>
         </section>
         <aside class="space-y-4">
           <p class="mono-meta">{{ student.id }}</p>
@@ -91,7 +86,6 @@ const auth = useAuthStore()
 const toasts = useToastStore()
 const pending = ref(true)
 const student = ref<Awaited<ReturnType<typeof $api.students.get>> | null>(null)
-const history = ref<Awaited<ReturnType<typeof $api.students.history>>>([])
 const relationships = ref<Awaited<ReturnType<typeof $api.students.relationships>>['data']>([])
 const graph = ref<Awaited<ReturnType<typeof $api.graph.neighborhood>> | null>(null)
 const showCorrection = ref(false)
@@ -114,7 +108,6 @@ function fillDraft() {
 async function load() {
   const id = String(route.params.id)
   student.value = await $api.students.get(id)
-  history.value = await $api.students.history(id)
   relationships.value = (await $api.students.relationships(id)).data
   graph.value = await $api.graph.neighborhood('student', id, 1)
   fillDraft()
@@ -137,7 +130,7 @@ function askSave() {
 function askArchive() {
   dialog.action = 'archive'
   dialog.title = 'Archive student?'
-  dialog.message = 'The student leaves the default directory. Related evidence is not deleted. Version history stays.'
+  dialog.message = 'The student leaves the default directory. Related evidence is not deleted.'
   dialog.confirmLabel = 'Archive'
   dialog.open = true
 }

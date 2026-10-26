@@ -1,6 +1,6 @@
 <template>
   <div>
-    <PageHeader title="Graph" kicker="Neighborhood" description="Approved student and group nodes with directional relationship edges. The graph loads a neighborhood, not the full database, and never includes private self-description fields." />
+    <PageHeader title="Graph" kicker="Neighborhood" description="Approved student and group nodes with directional relationship edges. Private self-description fields are never included." />
     <form class="mb-4 grid gap-3 md:grid-cols-4" @submit.prevent="loadOverview">
       <label class="text-sm">Highlight
         <input v-model="q" class="mt-1 w-full border border-panel-border bg-panel px-3 py-2" placeholder="Student or group" />

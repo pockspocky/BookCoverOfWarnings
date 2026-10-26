@@ -52,11 +52,6 @@
         </ul>
         <p v-else class="text-sm text-ink-400">No consent grants are attached to this published record.</p>
       </section>
-      <section class="mb-6 border border-panel-border bg-panel p-4">
-        <h2 class="mb-2 text-sm font-semibold uppercase tracking-wider text-ink-400">Change history</h2>
-        <TimelineList v-if="record.history.length" :items="record.history" />
-        <p v-else class="text-sm text-ink-400">No later revisions.</p>
-      </section>
       <form class="border border-panel-border bg-panel p-4" @submit.prevent="correct">
         <h2 class="mb-2 text-sm font-semibold">Request a correction</h2>
         <p class="mb-2 text-xs text-ink-400">The published direction stays as-is until approval. A mirrored record, if one exists, is a different UUID and is not edited here.</p>

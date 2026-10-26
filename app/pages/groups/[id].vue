@@ -64,11 +64,6 @@
             </ul>
             <p v-else class="text-sm text-ink-400">No approved relationships.</p>
           </section>
-          <section class="border border-panel-border bg-panel p-4">
-            <h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-ink-400">Version history</h2>
-            <TimelineList v-if="group.history.length" :items="group.history" />
-            <p v-else class="text-sm text-ink-400">No published revisions beyond the original record.</p>
-          </section>
         </div>
         <aside class="space-y-4">
           <MiniGraph v-if="graph" :graph="graph" />
@@ -82,10 +77,7 @@
               </select>
             </label>
             <label class="mb-2 block text-sm">Role
-              <select v-model="proposal.roleId" class="mt-1 w-full border border-panel-border bg-ink-950 px-2 py-1" required>
-                <option value="">Select</option>
-                <option v-for="role in roles" :key="role.id" :value="role.id">{{ role.name }}</option>
-              </select>
+              <input v-model="proposal.roleName" class="mt-1 w-full border border-panel-border bg-ink-950 px-2 py-1" type="text" maxlength="200" placeholder="Role" required />
             </label>
             <label class="mb-3 block text-sm">Start
               <input v-model="proposal.startDate" class="mt-1 w-full border border-panel-border bg-ink-950 px-2 py-1" type="date" required />
@@ -103,10 +95,7 @@
               </select>
             </label>
             <label class="mb-2 block text-sm">Role
-              <select v-model="proposal.roleId" class="mt-1 w-full border border-panel-border bg-ink-950 px-2 py-1" required>
-                <option value="">Select</option>
-                <option v-for="role in roles" :key="role.id" :value="role.id">{{ role.name }}</option>
-              </select>
+              <input v-model="proposal.roleName" class="mt-1 w-full border border-panel-border bg-ink-950 px-2 py-1" type="text" maxlength="200" placeholder="Role" required />
             </label>
             <label class="mb-2 block text-sm">Start
               <input v-model="proposal.startDate" class="mt-1 w-full border border-panel-border bg-ink-950 px-2 py-1" type="date" required />
@@ -138,8 +127,7 @@ const group = ref<Awaited<ReturnType<typeof $api.groups.get>> | null>(null)
 const relationships = ref<Awaited<ReturnType<typeof $api.groups.relationships>>['data']>([])
 const graph = ref<Awaited<ReturnType<typeof $api.graph.neighborhood>> | null>(null)
 const students = ref<Awaited<ReturnType<typeof $api.students.list>>['data']>([])
-const roles = ref<Awaited<ReturnType<typeof $api.groups.roles>>>([])
-const proposal = reactive({ studentId: '', roleId: '', startDate: '', endDate: '' })
+const proposal = reactive({ studentId: '', roleName: '', startDate: '', endDate: '' })
 const endDates = reactive<Record<string, string>>({})
 const endTarget = ref('')
 const showEdit = ref(false)
@@ -148,7 +136,7 @@ const editError = ref('')
 const dialog = reactive({ open: false, title: '', message: '', confirmLabel: 'Confirm', action: '' as 'join' | 'propose' | 'end' | 'save' | 'archive' })
 const saving = ref(false)
 const editDirty = computed(() => Boolean(showEdit.value && group.value) && (draft.name !== group.value?.name || draft.description !== group.value?.description))
-const dirty = computed(() => editDirty.value || Boolean(proposal.studentId || proposal.roleId || proposal.startDate || proposal.endDate) || Object.values(endDates).some((value) => value !== today()))
+const dirty = computed(() => editDirty.value || Boolean(proposal.studentId || proposal.roleName || proposal.startDate || proposal.endDate) || Object.values(endDates).some((value) => value !== today()))
 useUnsavedGuard(dirty)
 
 function today() {
@@ -164,7 +152,6 @@ async function load() {
   relationships.value = (await $api.groups.relationships(id)).data
   graph.value = await $api.graph.neighborhood('group', id, 1)
   students.value = (await $api.students.list({ pageSize: 50 })).data
-  roles.value = await $api.groups.roles()
   const activeIds = new Set(group.value.currentMembers.map((member) => member.id))
   for (const key of Object.keys(endDates)) {
     if (!activeIds.has(key)) delete endDates[key]
@@ -178,6 +165,10 @@ async function load() {
 
 function askJoin() {
   formError.value = ''
+  if (!proposal.roleName.trim()) {
+    formError.value = 'A role is required.'
+    return
+  }
   dialog.action = 'join'
   dialog.title = 'Add this member?'
   dialog.message = 'This publishes the membership immediately. It does not enter the review queue.'
@@ -187,6 +178,10 @@ function askJoin() {
 
 function askPropose() {
   formError.value = ''
+  if (!proposal.roleName.trim()) {
+    formError.value = 'A role is required.'
+    return
+  }
   dialog.action = 'propose'
   dialog.title = 'Queue this role proposal?'
   dialog.message = 'This submits a proposal. It is not published until an administrator approves it.'
@@ -277,12 +272,12 @@ async function join() {
     await $api.admin.createMembership({
       groupId: group.value.id,
       studentId: proposal.studentId,
-      roleId: proposal.roleId,
+      roleName: proposal.roleName.trim(),
       startDate: proposal.startDate,
       endDate: null
     })
     proposal.studentId = ''
-    proposal.roleId = ''
+    proposal.roleName = ''
     proposal.startDate = ''
     toasts.push('Membership published.', 'success')
     await load()
@@ -302,13 +297,13 @@ async function propose() {
       proposedData: {
         groupId: group.value.id,
         studentId: proposal.studentId,
-        roleId: proposal.roleId,
+        roleName: proposal.roleName.trim(),
         startDate: proposal.startDate,
         endDate: proposal.endDate || null
       }
     })
     proposal.studentId = ''
-    proposal.roleId = ''
+    proposal.roleName = ''
     proposal.startDate = ''
     proposal.endDate = ''
     toasts.push('Role proposal queued. It is not published yet.', 'success')

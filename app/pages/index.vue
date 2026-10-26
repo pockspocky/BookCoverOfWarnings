@@ -15,18 +15,6 @@
         <p class="mt-2 text-3xl font-semibold">{{ card.value }}</p>
       </NuxtLink>
     </div>
-    <section class="mt-8">
-      <h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-ink-400">Recent approved updates</h2>
-      <EmptyState v-if="!recent.length" title="No recent updates" description="Published revision history will appear here." />
-      <ul v-else class="divide-y divide-panel-border border border-panel-border">
-        <li v-for="item in recent" :key="item.id">
-          <NuxtLink :to="item.href" class="block px-4 py-3 hover:bg-ink-900">
-            <p class="text-sm">{{ item.title }}</p>
-            <p class="mono-meta">{{ item.occurredAt }} · {{ item.entityType }}</p>
-          </NuxtLink>
-        </li>
-      </ul>
-    </section>
   </div>
 </template>
 
@@ -35,7 +23,6 @@ const { $api } = useNuxtApp()
 const q = ref('')
 const pending = ref(true)
 const stats = ref({ students: 0, groups: 0, traits: 0, evidence: 0, relationships: 0 })
-const recent = ref<Awaited<ReturnType<typeof $api.dashboard.recent>>>([])
 
 const cards = computed(() => [
   { label: 'Students', value: stats.value.students, to: '/students' },
@@ -46,9 +33,7 @@ const cards = computed(() => [
 ])
 
 onMounted(async () => {
-  const [s, r] = await Promise.all([$api.dashboard.stats(), $api.dashboard.recent()])
-  stats.value = s
-  recent.value = r
+  stats.value = await $api.dashboard.stats()
   pending.value = false
 })
 
