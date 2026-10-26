@@ -1,0 +1,1 @@
+import{i as e}from"#entry";function t(t){if(e(t)){let e=Object.entries(t.fieldErrors).flatMap(([e,t])=>t.map(t=>`${e}: ${t}`));return e.length?`${t.message} ${e.join(` `)}`:t.message}return t instanceof Error?t.message:`Unexpected error.`}export{t};

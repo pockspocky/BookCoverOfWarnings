@@ -1,0 +1,1 @@
+import{I as e,b as t,f as n,q as r}from"./DvQqqu54.js";import{c as i}from"./pMmzfx3H.js";var a={class:`text-sm text-ink-400`},o=t({__name:`evidence`,async setup(t){let o,s;return[o,s]=r(()=>i(`/evidence`,{replace:!0})),await o,s(),(t,r)=>(e(),n(`p`,a,`Opening the evidence directory.`))}});export{o as default};
