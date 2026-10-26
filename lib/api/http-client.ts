@@ -222,7 +222,7 @@ export class HttpApiClient implements ApiClient {
     attachTraitEvidence: (id: string, payload: { evidenceId: string }) => this.request<MutationResult<TraitDetail>>('POST', `/api/admin/traits/${id}/evidence`, payload),
     patchEvidence: (id: string, payload: { summary?: string; evidenceDate?: string; urls?: string[] }) => this.request<MutationResult<Evidence>>('PATCH', `/api/admin/evidence/${id}`, payload),
     archiveEvidence: (id: string) => this.request<MutationResult<{ id: string }>>('POST', `/api/admin/evidence/${id}/archive`),
-    createMembership: (payload: { groupId: string; studentId: string; roleId: string; startDate: string; endDate?: string | null }) => this.request<MutationResult<GroupMembership>>('POST', '/api/admin/memberships', payload),
+    createMembership: (payload: { groupId: string; studentId: string; roleId?: string; roleName?: string; startDate: string; endDate?: string | null }) => this.request<MutationResult<GroupMembership>>('POST', '/api/admin/memberships', payload),
     patchMembership: (id: string, payload: { endDate: string }) => this.request<MutationResult<GroupMembership>>('PATCH', `/api/admin/memberships/${id}`, payload),
     createRelationship: (payload: CreateRelationshipPayload) => this.request<MutationResult<RelationshipDetail | RelationshipDetail[]>>('POST', '/api/admin/relationships', payload),
     patchRelationship: (id: string, payload: { generalComment?: string; startDate?: string | null; endDate?: string | null; status?: RelationshipStatus; baseVersion: number }) => this.request<MutationResult<RelationshipDetail>>('PATCH', `/api/admin/relationships/${id}`, payload),
