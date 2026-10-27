@@ -303,7 +303,7 @@ describe('API workflows', () => {
     })
   })
 
-  it('publishes a one-way relationship only after consent, and a mirror as two ids', async () => {
+  it('lets an administrator publish a relationship before subject consent, and a mirror as two ids', async () => {
     await inTx(async () => {
       const studentA = await insertStudent('Student A')
       const studentB = await insertStudent('Student B')
@@ -342,17 +342,8 @@ describe('API workflows', () => {
         })
       })).json() as { data: { id: string; status: string } }
       expect(queued.data.status).toBe('awaiting_consent')
-      const blocked = await app.request(`/api/admin/submissions/${queued.data.id}/approve`, { method: 'POST', headers: auth(admin.token) })
-      const blockedBody = await blocked.json() as { code: string }
-      expect(blocked.status).toBe(409)
-      expect(blockedBody.code).toBe('CONSENT_REQUIRED')
-      expect(await db.select({ id: relationships.id }).from(relationships)).toHaveLength(0)
       const adminGrant = await app.request(`/api/submissions/${queued.data.id}/consent`, { method: 'POST', headers: auth(admin.token) })
       expect(adminGrant.status).toBe(403)
-      expect((await app.request(`/api/submissions/${queued.data.id}/consent`, { method: 'POST', headers: auth(memberA.token) })).status).toBe(200)
-      const stillBlocked = await app.request(`/api/admin/submissions/${queued.data.id}/approve`, { method: 'POST', headers: auth(admin.token) })
-      expect((await stillBlocked.json() as { code: string }).code).toBe('CONSENT_REQUIRED')
-      expect((await app.request(`/api/submissions/${queued.data.id}/consent`, { method: 'POST', headers: auth(memberB.token) })).status).toBe(200)
       const approved = await (await app.request(`/api/admin/submissions/${queued.data.id}/approve`, { method: 'POST', headers: auth(admin.token) })).json() as { data: { publishedIds: string[] } }
       expect(approved.data.publishedIds).toHaveLength(1)
       expect(await db.select({ id: relationships.id }).from(relationships)).toHaveLength(1)
@@ -869,8 +860,7 @@ describe('API workflows', () => {
           createMirroredRelationship: false
         })
       })
-      expect(personal.status).toBe(409)
-      expect((await personal.json() as { code: string }).code).toBe('CONSENT_REQUIRED')
+      expect(personal.status).toBe(200)
       const personalMirror = await app.request('/api/admin/relationships', {
         method: 'POST',
         headers: auth(admin.token),
@@ -884,9 +874,8 @@ describe('API workflows', () => {
           createMirroredRelationship: true
         })
       })
-      expect(personalMirror.status).toBe(409)
-      expect((await personalMirror.json() as { code: string }).code).toBe('CONSENT_REQUIRED')
-      expect(await db.select({ id: relationships.id }).from(relationships)).toHaveLength(0)
+      expect(personalMirror.status).toBe(200)
+      expect(await db.select({ id: relationships.id }).from(relationships)).toHaveLength(3)
 
       const groupOne = await app.request('/api/admin/groups', {
         method: 'POST',
@@ -921,7 +910,7 @@ describe('API workflows', () => {
       const backward = mirrorBody.data.find((row) => row.sourceId === groupTwoId)
       expect(forward?.targetId).toBe(groupTwoId)
       expect(backward?.targetId).toBe(groupOneId)
-      expect(await db.select({ id: relationships.id }).from(relationships)).toHaveLength(2)
+      expect(await db.select({ id: relationships.id }).from(relationships)).toHaveLength(5)
       expect(await db.select({ id: submissions.id }).from(submissions)).toHaveLength(0)
 
       const reusedType = await app.request('/api/admin/relationships', {

@@ -3,7 +3,7 @@
     <PageHeader
       title="Create a relationship"
       kicker="Relationship"
-      description="Administrators publish immediately. Choose an existing type or type a new one. A name that does not already exist is saved as a new type, ignoring letter case. A personal relationship is not written when subject consent is missing."
+      description="Administrators publish immediately, including when subject consent has not been recorded. Choose an existing type or type a new one. A name that does not already exist is saved as a new type, ignoring letter case."
     />
     <EmptyState v-if="!auth.isAdmin" title="Administrators create relationships" description="Members cannot propose a relationship. An administrator publishes it directly." />
     <form v-else class="grid max-w-3xl gap-4 border border-panel-border bg-panel p-4" @submit.prevent="askSubmit">
@@ -125,7 +125,7 @@ onMounted(async () => {
 function askSubmit() {
   formError.value = ''
   dialog.title = 'Create this relationship?'
-  dialog.message = 'This publishes immediately when consent allows it. A typed type is reused when its name already exists, ignoring letter case, and created when it does not. A mirror writes both directions or neither.'
+  dialog.message = 'This publishes immediately. Missing subject consent does not block it. A typed type is reused when its name already exists, ignoring letter case, and created when it does not. A mirror writes both directions or neither.'
   dialog.confirmLabel = 'Create'
   dialog.open = true
 }

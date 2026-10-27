@@ -47,10 +47,10 @@ Institutional login is an authorization-code redirect with PKCE. The callback ac
 Members call `POST /api/submissions`. That call does not write a student, trait, group, membership, or relationship. Administrators approve or reject.
 
 - Approve publishes inside one transaction and appends version history when the record is versioned. Private keys are removed before the revision is stored.
-- A mirrored relationship is two submissions with the same `batch_id`. Approve publishes both or, if consent is missing, neither.
+- A mirrored relationship is two submissions with the same `batch_id`. Approve publishes both directions together.
 - Reject deletes the submission and consent rows that only pointed at it. The audit row stores the action, actor, time, and entity reference.
 - Corrections carry `baseVersion`. A mismatch returns `409 CONFLICT` and leaves the published record unchanged.
-- Personal relationships stay `awaiting_consent` until every subject grants consent. Approval does not satisfy a missing grant.
+- Personal relationships are marked `awaiting_consent` until every subject grants consent. An administrator can still approve and publish while a grant is missing.
 - Withdrawing consent archives the published entity on that grant and records a revision.
 
 ## Graph and search

@@ -1,6 +1,6 @@
 <template>
   <div>
-    <PageHeader title="Submission queue" kicker="Admin" description="Consent must already be valid. Approval does not replace it. Rejection removes the proposal instead of archiving its content." />
+    <PageHeader title="Submission queue" kicker="Admin" description="Approval publishes the proposal even when subject consent is still missing. Rejection removes the proposal instead of archiving its content." />
     <form class="mb-4 flex gap-2" @submit.prevent="load">
       <label class="text-sm">Status
         <select v-model="status" class="ml-2 border border-panel-border bg-panel px-2 py-1">
@@ -41,7 +41,7 @@
       </article>
     </div>
     <PaginationBar v-if="meta" :meta="meta" @page="(n) => { page = n; load() }" />
-    <ConfirmDialog :open="dialog.open" :title="dialog.action === 'reject' ? 'Delete this submission?' : 'Publish this submission?'" :message="dialog.action === 'reject' ? 'Rejection deletes the submitted content. It is not kept in a rejection archive.' : 'Publishing writes a new authorized record. This cannot bypass missing consent.'" :confirm-label="dialog.action === 'reject' ? 'Delete submission' : 'Publish'" @cancel="dialog.open = false" @confirm="confirm" />
+    <ConfirmDialog :open="dialog.open" :title="dialog.action === 'reject' ? 'Delete this submission?' : 'Publish this submission?'" :message="dialog.action === 'reject' ? 'Rejection deletes the submitted content. It is not kept in a rejection archive.' : 'Publishing writes the record now. Missing subject consent does not block it.'" :confirm-label="dialog.action === 'reject' ? 'Delete submission' : 'Publish'" @cancel="dialog.open = false" @confirm="confirm" />
   </div>
 </template>
 
