@@ -1986,13 +1986,14 @@ components:
         baseVersion: { type: [integer, "null"] }
     CreateRelationship:
       type: object
-      required: [sourceType, sourceId, targetType, targetId, relationshipTypeId, generalComment]
+      required: [sourceType, sourceId, targetType, targetId, generalComment]
       properties:
         sourceType: { $ref: "#/components/schemas/EndpointType" }
         sourceId: { type: string, format: uuid }
         targetType: { $ref: "#/components/schemas/EndpointType" }
         targetId: { type: string, format: uuid }
         relationshipTypeId: { type: string, format: uuid }
+        relationshipTypeName: { type: string, description: "Used when relationshipTypeId is omitted. An existing type is reused when the name matches, ignoring case. Otherwise a new type is created." }
         generalComment: { type: string }
         startDate: { type: [string, "null"] }
         endDate: { type: [string, "null"] }

@@ -78,7 +78,8 @@ export const createRelationshipSchema = z.object({
   sourceId: uuidSchema,
   targetType: z.enum(EndpointType),
   targetId: uuidSchema,
-  relationshipTypeId: uuidSchema,
+  relationshipTypeId: uuidSchema.optional(),
+  relationshipTypeName: z.string().min(1).max(200).optional(),
   generalComment: markdownSchema,
   startDate: z.string().nullable().optional(),
   endDate: z.string().nullable().optional(),
@@ -86,6 +87,9 @@ export const createRelationshipSchema = z.object({
 }).superRefine((value, ctx) => {
   if (value.sourceType === value.targetType && value.sourceId === value.targetId) {
     ctx.addIssue({ code: 'custom', message: 'A record cannot relate to itself.', path: ['targetId'] })
+  }
+  if (!value.relationshipTypeId && !value.relationshipTypeName?.trim()) {
+    ctx.addIssue({ code: 'custom', message: 'A relationship type is required.', path: ['relationshipTypeName'] })
   }
 })
 
