@@ -13,8 +13,6 @@ import { newId } from '../util'
 import { writeAudit } from './records'
 import { assertVersion } from './submissions'
 
-const CONSENT_MESSAGE = 'Administrator approval cannot substitute for required subject consent.'
-
 function requireAdministrator(actor: Actor) {
   if (actor.role !== 'administrator') throw ApiError.forbidden('Administrator access is required.')
 }
@@ -39,18 +37,6 @@ function peelBaseVersion(body: unknown) {
     throw ApiError.validation('baseVersion must be an integer.', { baseVersion: ['baseVersion must be an integer.'] })
   }
   return { proposedData: record, baseVersion: value }
-}
-
-async function assertDirectConsent(
-  db: Database,
-  entityType: EntityType,
-  proposed: Record<string, unknown>,
-  operation: 'create' | 'update',
-  targetEntityId: string | null
-) {
-  const subjects = await requireModule(entityType).consentSubjects(db, proposed, operation, targetEntityId)
-  const unique = new Set(subjects.map((subject) => `${subject.subjectStudentId}:${subject.scope}`))
-  if (unique.size) throw ApiError.consentRequired(CONSENT_MESSAGE)
 }
 
 function synthetic(actor: Actor, input: {
@@ -101,7 +87,6 @@ async function applyDirect(db: Database, actor: Actor, input: {
     throw ApiError.validation('A correction needs baseVersion.', { baseVersion: ['A correction needs baseVersion.'] })
   }
   await assertVersion(db, input.entityType, input.operation, input.targetEntityId, peeled.baseVersion)
-  await assertDirectConsent(db, input.entityType, proposed, input.operation, input.targetEntityId)
   const ids = await module.apply(db, synthetic(actor, {
     entityType: input.entityType,
     operation: input.operation,

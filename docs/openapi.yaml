@@ -33,8 +33,8 @@ info:
 
     ## Administrator publication
     - `POST /api/admin/students`, `/api/admin/traits`, `/api/admin/evidence`, `/api/admin/memberships`, and `/api/admin/relationships` publish immediately. They do not create a submission.
-    - Those writes use the same validation, version check, and consent rules as approval. A supplied `baseVersion` that does not match returns `409` and does not write.
-    - A relationship that names a student returns `409` with `CONSENT_REQUIRED` when that consent is missing. Administrator publication does not create consent, and neither direction of a mirror is written.
+    - Those writes use the same validation and version check as approval. A supplied `baseVersion` that does not match returns `409` and does not write.
+    - An administrator can publish a relationship that names a student while subject consent is still missing. Publication does not create that consent.
     - Members receive `403`. Trait, evidence, and relationship creates from members stay on `POST /api/submissions`. Student creation is administrator-only.
     - Published removal is archive. Archiving a trait keeps shared evidence and version history. Ending a membership sets `endDate` and keeps the row.
     - Request bodies for these routes do not include private self-description fields.
@@ -720,7 +720,7 @@ paths:
       tags: [Submissions]
       summary: Queue a proposal or a mirrored relationship pair
       description: |
-        Members cannot publish by calling this endpoint. Personal relationships are stored as `awaiting_consent` until every subject requirement is satisfied.
+        Members cannot publish by calling this endpoint. Personal relationships are stored as `awaiting_consent` until a subject grants consent or an administrator approves the submission.
         When `proposedData.createMirroredRelationship` is true and `entityType` is `relationship`, the server creates both directions atomically.
         Membership role proposals use `entityType=group_membership`.
         Rate limit: 30 per session in the demo contract.
@@ -837,7 +837,7 @@ paths:
   /api/admin/submissions/{id}/approve:
     post:
       tags: [Admin]
-      description: Publishes the submission, or both halves of a mirror batch. Returns 409 CONSENT_REQUIRED when any requirement is unsatisfied. Returns 409 CONFLICT when baseVersion is stale. Does not write partial mirror pairs.
+      description: Publishes the submission, or both halves of a mirror batch, including when subject consent is still missing. Returns 409 CONFLICT when baseVersion is stale. Does not write partial mirror pairs.
       parameters:
         - $ref: "#/components/parameters/id"
       responses:
@@ -1316,8 +1316,8 @@ paths:
     post:
       tags: [Admin]
       description: |
-        Publishes a relationship immediately when consent is already satisfied. A student endpoint without consent returns 409 CONSENT_REQUIRED and writes nothing.
-        `createMirroredRelationship: true` writes both directions in one transaction as two ids. If either direction lacks consent, neither is written.
+        Publishes a relationship immediately. Missing subject consent does not block the write and is not created by it.
+        `createMirroredRelationship: true` writes both directions in one transaction as two ids. If either direction fails validation, neither is written.
       requestBody:
         required: true
         content:

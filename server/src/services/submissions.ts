@@ -230,9 +230,6 @@ export async function approveSubmission(db: Database, actor: Actor, id: string) 
   if (actor.role !== 'administrator') throw ApiError.forbidden('Only administrators can publish submissions.')
   return runInTransaction(db, async (tx) => {
     const batch = await lockBatch(tx, id)
-    if (batch.some((item) => item.status === 'awaiting_consent' || item.consentRequirements.some((requirement) => !requirement.satisfied))) {
-      throw ApiError.consentRequired('Administrator approval cannot substitute for required subject consent.')
-    }
     for (const item of batch) {
       await assertVersion(tx, item.entityType, item.operation, item.targetEntityId, item.baseVersion)
     }
