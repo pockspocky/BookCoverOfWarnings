@@ -131,17 +131,20 @@ function relationshipBody(data: {
   sourceId: string
   targetType: 'student' | 'group'
   targetId: string
-  relationshipTypeId: string
+  relationshipTypeId?: string
+  relationshipTypeName?: string
   generalComment: string
   startDate?: string | null
   endDate?: string | null
 }) {
+  const relationshipTypeName = data.relationshipTypeName?.trim()
   return {
     sourceType: data.sourceType,
     sourceId: data.sourceId,
     targetType: data.targetType,
     targetId: data.targetId,
-    relationshipTypeId: data.relationshipTypeId,
+    ...(data.relationshipTypeId ? { relationshipTypeId: data.relationshipTypeId } : {}),
+    ...(relationshipTypeName ? { relationshipTypeName } : {}),
     generalComment: data.generalComment,
     startDate: data.startDate ?? null,
     endDate: data.endDate ?? null

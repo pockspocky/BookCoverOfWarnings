@@ -179,7 +179,8 @@ export interface CreateRelationshipPayload {
   sourceId: string
   targetType: EndpointType
   targetId: string
-  relationshipTypeId: string
+  relationshipTypeId?: string
+  relationshipTypeName?: string
   generalComment: string
   startDate?: string | null
   endDate?: string | null

@@ -184,7 +184,8 @@ async function queueMirror(db: Database, actor: Actor, proposed: {
   sourceId: string
   targetType: 'student' | 'group'
   targetId: string
-  relationshipTypeId: string
+  relationshipTypeId?: string
+  relationshipTypeName?: string
   generalComment: string
   startDate?: string | null
   endDate?: string | null

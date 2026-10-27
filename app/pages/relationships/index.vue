@@ -1,7 +1,7 @@
 <template>
   <div>
     <PageHeader title="Relationships" kicker="Directory" description="Directional records. A→B does not imply B→A.">
-      <NuxtLink to="/relationships/new" class="bg-accent px-3 py-1.5 text-sm text-accent-fg">Propose relationship</NuxtLink>
+      <NuxtLink v-if="auth.isAdmin" to="/relationships/new" class="bg-accent px-3 py-1.5 text-sm text-accent-fg">Create relationship</NuxtLink>
     </PageHeader>
     <form class="mb-4 grid gap-3 md:grid-cols-4" @submit.prevent="load">
       <input v-model="q" class="border border-panel-border bg-panel px-3 py-2 text-sm" placeholder="Endpoint name" aria-label="Endpoint name" />
@@ -37,6 +37,7 @@
 import { errorMessage } from '../../utils/errors'
 
 const { $api } = useNuxtApp()
+const auth = useAuthStore()
 const q = ref('')
 const relationshipTypeId = ref('')
 const status = ref('')

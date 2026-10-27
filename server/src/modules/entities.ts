@@ -747,6 +747,21 @@ export async function endMembership(db: Database, id: string, endDate: string) {
   await db.update(groupMemberships).set({ endDate, updatedAt: new Date() }).where(eq(groupMemberships.id, id))
 }
 
+async function resolveRelationshipType(db: Database, data: { relationshipTypeId?: string; relationshipTypeName?: string }) {
+  const name = data.relationshipTypeName?.trim() ?? ''
+  if (name) {
+    const existing = await db.select({ id: relationshipTypes.id }).from(relationshipTypes).where(sql`lower(${relationshipTypes.name}) = ${name.toLowerCase()}`).limit(1)
+    if (existing[0]) return existing[0].id
+    return insertRelationshipType(db, { name, description: '', category: '' })
+  }
+  if (data.relationshipTypeId) {
+    const type = await db.select({ id: relationshipTypes.id }).from(relationshipTypes).where(eq(relationshipTypes.id, data.relationshipTypeId)).limit(1)
+    if (!type[0]) throw ApiError.validation('Unknown relationship type.', { relationshipTypeId: ['Unknown relationship type.'] })
+    return data.relationshipTypeId
+  }
+  throw ApiError.validation('A relationship type is required.', { relationshipTypeName: ['A relationship type is required.'] })
+}
+
 export const relationshipModule: EntityModule = {
   entityType: 'relationship',
   sensitiveKeys: ['sexualityPreset', 'sexualityCustom'],
@@ -777,8 +792,7 @@ export const relationshipModule: EntityModule = {
       const data = createRelationshipSchema.parse(submission.proposedData)
       await assertEndpoint(db, data.sourceType, data.sourceId)
       await assertEndpoint(db, data.targetType, data.targetId)
-      const type = await db.select({ id: relationshipTypes.id }).from(relationshipTypes).where(eq(relationshipTypes.id, data.relationshipTypeId)).limit(1)
-      if (!type[0]) throw ApiError.validation('Unknown relationship type.', { relationshipTypeId: ['Unknown relationship type.'] })
+      const relationshipTypeId = await resolveRelationshipType(db, data)
       const id = newId()
       const now = new Date()
       await db.insert(relationships).values({
@@ -787,7 +801,7 @@ export const relationshipModule: EntityModule = {
         sourceId: data.sourceId,
         targetType: data.targetType,
         targetId: data.targetId,
-        relationshipTypeId: data.relationshipTypeId,
+        relationshipTypeId,
         generalComment: data.generalComment,
         startDate: nullableDate(data.startDate),
         endDate: nullableDate(data.endDate),

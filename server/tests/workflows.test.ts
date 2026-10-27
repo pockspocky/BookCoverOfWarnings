@@ -924,6 +924,38 @@ describe('API workflows', () => {
       expect(await db.select({ id: relationships.id }).from(relationships)).toHaveLength(2)
       expect(await db.select({ id: submissions.id }).from(submissions)).toHaveLength(0)
 
+      const reusedType = await app.request('/api/admin/relationships', {
+        method: 'POST',
+        headers: auth(admin.token),
+        body: JSON.stringify({
+          sourceType: 'group',
+          sourceId: groupTwoId,
+          targetType: 'group',
+          targetId: groupOneId,
+          relationshipTypeName: 'studies with',
+          generalComment: 'Reuses the existing type',
+          createMirroredRelationship: false
+        })
+      })
+      expect(reusedType.status).toBe(200)
+      const createdType = await app.request('/api/admin/relationships', {
+        method: 'POST',
+        headers: auth(admin.token),
+        body: JSON.stringify({
+          sourceType: 'group',
+          sourceId: groupOneId,
+          targetType: 'group',
+          targetId: groupTwoId,
+          relationshipTypeName: 'Competes with',
+          generalComment: 'Creates a new type',
+          createMirroredRelationship: false
+        })
+      })
+      expect(createdType.status).toBe(200)
+      const typeNames = await db.select({ name: relationshipTypes.name }).from(relationshipTypes)
+      expect(typeNames.filter((row) => row.name.toLowerCase() === 'studies with')).toHaveLength(1)
+      expect(typeNames.some((row) => row.name === 'Competes with')).toBe(true)
+
       const roleResponse = await app.request('/api/admin/group-roles', {
         method: 'POST',
         headers: auth(admin.token),

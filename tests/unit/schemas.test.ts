@@ -22,6 +22,23 @@ describe('schemas and presentation guards', () => {
       generalComment: 'Invalid.'
     })
     expect(selfLink.success).toBe(false)
+    const missingType = createRelationshipSchema.safeParse({
+      sourceType: 'student',
+      sourceId: '11111111-1111-4111-8111-111111111111',
+      targetType: 'group',
+      targetId: '33333333-3333-4333-8333-333333333333',
+      generalComment: 'Missing type.'
+    })
+    expect(missingType.success).toBe(false)
+    const namedType = createRelationshipSchema.safeParse({
+      sourceType: 'student',
+      sourceId: '11111111-1111-4111-8111-111111111111',
+      targetType: 'group',
+      targetId: '33333333-3333-4333-8333-333333333333',
+      relationshipTypeName: 'Studies with',
+      generalComment: 'Named type.'
+    })
+    expect(namedType.success).toBe(true)
     expect(httpsUrlSchema.safeParse('http://records.northbridge.test/file').success).toBe(false)
     expect(httpsUrlSchema.safeParse('https://records.northbridge.test/file').success).toBe(true)
   })
