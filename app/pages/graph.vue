@@ -1,6 +1,6 @@
 <template>
   <div>
-    <PageHeader title="Graph" kicker="Neighborhood" description="Approved student and group nodes with directional relationship edges. Private self-description fields are never included." />
+    <PageHeader title="Graph" kicker="Neighborhood" description="Students are circles and groups are squares. Arrows follow the relationship direction. A dashed line is an ended relationship. Private fields are never included." />
     <form class="mb-4 grid gap-3 md:grid-cols-4" @submit.prevent="loadOverview">
       <label class="text-sm">Highlight
         <input v-model="q" class="mt-1 w-full border border-panel-border bg-panel px-3 py-2" placeholder="Student or group" />
@@ -27,7 +27,7 @@
     <EmptyState v-else-if="error" title="Graph unavailable" :description="error" />
     <EmptyState v-else-if="!visible.nodes.length" title="No visible nodes" description="Adjust the filters or search for a published student or group." />
     <div v-else class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
-      <RelationshipGraph :graph="visible" :selected-node-id="selectedNode?.id" :highlight-query="q" @select-node="selectedNode = $event" @select-edge="selectedEdge = $event" />
+      <RelationshipGraph :graph="visible" :selected-node-id="selectedNode?.id" :selected-edge-id="selectedEdge?.id" :highlight-query="q" @select-node="selectedNode = $event" @select-edge="selectedEdge = $event" />
       <aside class="space-y-4 border border-panel-border bg-panel p-4">
         <div v-if="selectedNode">
           <p class="mono-meta uppercase">{{ selectedNode.type }}</p>
@@ -35,7 +35,10 @@
           <p class="mt-1 text-xs text-ink-400">Immediate neighbors are highlighted. Other nodes are dimmed.</p>
           <div class="mt-3 flex flex-wrap gap-2">
             <NuxtLink class="border border-accent px-2 py-1 text-sm text-accent" :to="profileHref(selectedNode)">Open profile</NuxtLink>
-            <button class="border border-panel-border px-2 py-1 text-sm" type="button" @click="expand(selectedNode)">Expand neighborhood</button>
+            <button class="border border-panel-border px-2 py-1 text-sm" type="button" @click="expand(selectedNode)">Expand {{ depth }} hop{{ depth === 1 ? '' : 's' }}</button>
+            <label class="flex items-center gap-2 text-xs text-ink-400">Depth
+              <input v-model.number="depth" class="w-24" type="range" min="1" max="3" step="1" />
+            </label>
           </div>
         </div>
         <div v-if="selectedEdge" class="border-t border-panel-border pt-3">
@@ -72,6 +75,7 @@ const types = ref<Awaited<ReturnType<typeof $api.relationships.types>>>([])
 const graph = ref<GraphNeighborhood>({ nodes: [], edges: [] })
 const selectedNode = ref<GraphNode | null>(null)
 const selectedEdge = ref<GraphEdge | null>(null)
+const depth = ref(1)
 
 const visible = computed<GraphNeighborhood>(() => {
   const nodes = nodeType.value ? graph.value.nodes.filter((node) => node.type === nodeType.value) : graph.value.nodes
@@ -119,7 +123,7 @@ async function expand(node: GraphNode) {
   const [, id] = node.id.split(':')
   if (!id) return
   try {
-    const next = await $api.graph.neighborhood(node.type, id, 1)
+    const next = await $api.graph.neighborhood(node.type, id, depth.value)
     merge(next)
   } catch (err) {
     error.value = errorMessage(err)

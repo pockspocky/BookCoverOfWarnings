@@ -20,6 +20,8 @@ html.dark {
   --accent: 196 163 90;
   --accent-muted: 138 115 64;
   --accent-fg: 27 24 20;
+  --graph-group: 110 168 160;
+  --graph-ended: 125 118 104;
 }
 
 html.light {
@@ -41,6 +43,8 @@ html.light {
   --accent: 122 90 28;
   --accent-muted: 138 115 64;
   --accent-fg: 255 250 240;
+  --graph-group: 30 90 84;
+  --graph-ended: 92 86 76;
 }
 
 html,
