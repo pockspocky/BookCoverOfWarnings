@@ -1,0 +1,1 @@
+import{M as e,k as t}from"./De8ZohZ7.js";import{j as n}from"./B_6pi9At.js";function r(r){function i(e){r.value&&(e.preventDefault(),e.returnValue=``)}e(()=>window.addEventListener(`beforeunload`,i)),t(()=>window.removeEventListener(`beforeunload`,i)),n(()=>!r.value||window.confirm(`You have unsaved changes. Leave this page without saving?`))}export{r as t};

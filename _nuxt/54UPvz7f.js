@@ -1,1 +1,0 @@
-import{c as e,o as t}from"./pMmzfx3H.js";import{a as n}from"#entry";var r=t(async t=>{let r=n();if(!r.user&&!r.loading&&await r.load(),t.path===`/login`)return r.isAuthenticated?e(`/`):void 0;if(!r.isAuthenticated)return e(`/login?next=${encodeURIComponent(t.fullPath)}`);if(t.path.startsWith(`/admin`)&&!r.isAdmin)return e(`/forbidden`)});export{r as default};

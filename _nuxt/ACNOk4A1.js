@@ -1,1 +1,0 @@
-import{ot as e}from"./DvQqqu54.js";import{n as t}from"./MtSFGEXL.js";var n=t(`toasts`,()=>{let t=e([]),n=1;function r(e,r=`info`){let a=n++;t.value.push({id:a,tone:r,message:e}),setTimeout(()=>i(a),5200)}function i(e){t.value=t.value.filter(t=>t.id!==e)}return{items:t,push:r,dismiss:i}});export{n as t};

@@ -1,0 +1,1 @@
+import{H as e,P as t,f as n,y as r}from"./De8ZohZ7.js";import{c as i}from"./CVhpIIQP.js";var a={class:`text-sm text-ink-400`},o=r({__name:`students`,async setup(r){let o,s;return[o,s]=e(()=>i(`/students`,{replace:!0})),await o,s(),(e,r)=>(t(),n(`p`,a,`Opening the student directory.`))}});export{o as default};
