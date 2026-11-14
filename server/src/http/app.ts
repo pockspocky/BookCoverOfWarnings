@@ -580,7 +580,7 @@ export function createApp(deps: AppDeps) {
     const parsed = verifyEvidenceSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) throw fromZod(parsed.error)
     const id = pathId(c.req.param('id'))
-    await verifyEvidence(deps.db, id, parsed.data.verificationStatus, parsed.data.reliabilityScore)
+    await verifyEvidence(deps.db, id, parsed.data.verificationStatus, parsed.data.reliabilityScore, actor.id)
     return c.json({ data: await loadEvidenceRow(deps.db, actor, id), message: 'Evidence verification saved.' })
   })
   app.post('/api/admin/groups', async (c) => {
@@ -612,7 +612,7 @@ export function createApp(deps: AppDeps) {
     requireAdmin(actor)
     const parsed = namedSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) throw fromZod(parsed.error)
-    const id = await insertCategory(deps.db, parsed.data)
+    const id = await insertCategory(deps.db, parsed.data, actor.id)
     return c.json({ data: await loadCategory(deps.db, id), message: 'Category created.' })
   })
   app.patch('/api/admin/categories/:id', async (c) => {
@@ -625,7 +625,7 @@ export function createApp(deps: AppDeps) {
     }).safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) throw fromZod(parsed.error)
     const id = pathId(c.req.param('id'))
-    await patchCategory(deps.db, id, parsed.data)
+    await patchCategory(deps.db, id, parsed.data, actor.id)
     return c.json({ data: await loadCategory(deps.db, id), message: 'Category updated.' })
   })
   app.post('/api/admin/relationship-types', async (c) => {
@@ -633,7 +633,7 @@ export function createApp(deps: AppDeps) {
     requireAdmin(actor)
     const parsed = namedSchema.extend({ category: z.string().min(1).max(100) }).safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) throw fromZod(parsed.error)
-    const id = await insertRelationshipType(deps.db, parsed.data)
+    const id = await insertRelationshipType(deps.db, parsed.data, actor.id)
     return c.json({ data: await loadRelationshipType(deps.db, id), message: 'Relationship type created.' })
   })
   app.patch('/api/admin/relationship-types/:id', async (c) => {
@@ -647,7 +647,7 @@ export function createApp(deps: AppDeps) {
     }).safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) throw fromZod(parsed.error)
     const id = pathId(c.req.param('id'))
-    await patchRelationshipType(deps.db, id, parsed.data)
+    await patchRelationshipType(deps.db, id, parsed.data, actor.id)
     return c.json({ data: await loadRelationshipType(deps.db, id), message: 'Relationship type updated.' })
   })
   app.post('/api/admin/group-roles', async (c) => {
@@ -655,7 +655,7 @@ export function createApp(deps: AppDeps) {
     requireAdmin(actor)
     const parsed = namedSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) throw fromZod(parsed.error)
-    const id = await insertGroupRole(deps.db, parsed.data)
+    const id = await insertGroupRole(deps.db, parsed.data, actor.id)
     return c.json({ data: await loadRole(deps.db, id), message: 'Role created.' })
   })
   app.patch('/api/admin/group-roles/:id', async (c) => {
@@ -668,7 +668,7 @@ export function createApp(deps: AppDeps) {
     }).safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) throw fromZod(parsed.error)
     const id = pathId(c.req.param('id'))
-    await patchGroupRole(deps.db, id, parsed.data)
+    await patchGroupRole(deps.db, id, parsed.data, actor.id)
     return c.json({ data: await loadRole(deps.db, id), message: 'Role updated.' })
   })
   app.post('/api/admin/traits/:id/archive', async (c) => {
@@ -684,7 +684,7 @@ export function createApp(deps: AppDeps) {
     const parsed = z.object({ evidenceId: uuidSchema }).safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) throw fromZod(parsed.error)
     const id = pathId(c.req.param('id'))
-    await attachTraitEvidence(deps.db, id, parsed.data.evidenceId)
+    await attachTraitEvidence(deps.db, id, parsed.data.evidenceId, actor.id)
     return c.json({ data: await getTrait(deps.db, id), message: 'Evidence attached.' })
   })
   app.post('/api/admin/students', async (c) => {

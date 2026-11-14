@@ -1281,4 +1281,86 @@ describe('API workflows', () => {
       expect(await db.select({ id: traitEvidence.id }).from(traitEvidence).where(eq(traitEvidence.traitId, traitId))).toHaveLength(1)
     })
   })
+
+  it('lists where and what changed for every signed-in user, without the editor or unpublished text', async () => {
+    await inTx(async () => {
+      const matchedId = await insertStudent('Roster Student')
+      await insertAccount('recent-member@northbridge.test', 'member', matchedId)
+      await insertAccount('recent-admin@northbridge.test', 'administrator', null)
+      const member = await login('recent-member@northbridge.test')
+      const admin = await login('recent-admin@northbridge.test')
+      const anonymous = await login('', '')
+
+      const created = await app.request('/api/admin/students', {
+        method: 'POST',
+        headers: auth(admin.token),
+        body: JSON.stringify({ displayName: 'Recent Student', graduationYear: 2026, generalComment: 'Hello' })
+      })
+      expect(created.status).toBe(200)
+      const studentId = (await created.json() as { data: { id: string } }).data.id
+      const patched = await app.request(`/api/admin/students/${studentId}`, {
+        method: 'PATCH',
+        headers: auth(admin.token),
+        body: JSON.stringify({ generalComment: 'Hello again', baseVersion: 1 })
+      })
+      expect(patched.status).toBe(200)
+
+      const evidenceResponse = await app.request('/api/admin/evidence', {
+        method: 'POST',
+        headers: auth(admin.token),
+        body: JSON.stringify({ summary: 'Lab note', evidenceDate: '2026-03-01', urls: [] })
+      })
+      expect(evidenceResponse.status).toBe(200)
+      const evidenceId = (await evidenceResponse.json() as { data: { id: string } }).data.id
+      const evidencePatch = await app.request(`/api/admin/evidence/${evidenceId}`, {
+        method: 'PATCH',
+        headers: auth(admin.token),
+        body: JSON.stringify({ summary: 'Lab note revised' })
+      })
+      expect(evidencePatch.status).toBe(200)
+
+      const queued = await app.request('/api/submissions', {
+        method: 'POST',
+        headers: auth(member.token),
+        body: JSON.stringify({
+          entityType: 'student',
+          operation: 'correction',
+          targetEntityId: studentId,
+          baseVersion: 2,
+          proposedData: { generalComment: 'pending-only-note' }
+        })
+      })
+      expect(queued.status).toBe(200)
+
+      const memberFeed = await (await app.request('/api/dashboard/recent', { headers: auth(member.token) })).json() as Array<{ entityType: string; title: string; summary: string; href: string }>
+      const adminFeed = await (await app.request('/api/dashboard/recent', { headers: auth(admin.token) })).json() as Array<{ entityType: string; title: string; summary: string; href: string }>
+      const anonymousFeed = await (await app.request('/api/dashboard/recent', { headers: auth(anonymous.token) })).json()
+      expect((await app.request('/api/dashboard/recent')).status).toBe(401)
+      expect(adminFeed).toEqual(memberFeed)
+      expect(anonymousFeed).toEqual(memberFeed)
+
+      const studentEvents = memberFeed.filter((item) => item.title === 'Recent Student')
+      expect(studentEvents.map((item) => item.entityType)).toEqual(['student', 'student'])
+      expect(studentEvents.map((item) => item.summary)).toEqual(expect.arrayContaining([
+        'Updated general comment',
+        'Added display name, graduation year, and general comment'
+      ]))
+      expect(studentEvents.every((item) => item.href === `/students/${studentId}`)).toBe(true)
+
+      const evidenceEvents = memberFeed.filter((item) => item.title === 'Lab note revised')
+      expect(evidenceEvents.map((item) => item.summary)).toEqual(expect.arrayContaining([
+        'Updated summary',
+        'Added summary, evidence date, and verification'
+      ]))
+      expect(evidenceEvents).toHaveLength(2)
+      expect(evidenceEvents.every((item) => item.href === `/evidence/${evidenceId}`)).toBe(true)
+
+      const serialized = JSON.stringify(memberFeed)
+      expect(serialized).not.toContain('pending-only-note')
+      expect(serialized).not.toContain('Hello again')
+      expect(serialized).not.toContain('recent-admin@northbridge.test')
+      expect(serialized).not.toContain('changedBy')
+      expect(serialized).not.toContain('sexual')
+    })
+  })
 })

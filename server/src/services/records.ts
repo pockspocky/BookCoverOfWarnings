@@ -1,9 +1,17 @@
-import { and, eq } from 'drizzle-orm'
+import { and, desc, eq } from 'drizzle-orm'
 import type { EntityType } from '../../../lib/types/enums'
 import type { Database } from '../db/client'
 import { auditEvents, fieldDefinitions, fieldValues, recordRevisions, searchDocuments } from '../db/schema'
 import { stripPrivate } from '../privacy/strip'
 import { iso, newId } from '../util'
+
+export async function nextRevisionVersion(db: Database, entityType: string, entityId: string) {
+  const rows = await db.select({ version: recordRevisions.version }).from(recordRevisions).where(and(
+    eq(recordRevisions.entityType, entityType),
+    eq(recordRevisions.entityId, entityId)
+  )).orderBy(desc(recordRevisions.version)).limit(1)
+  return (rows[0]?.version ?? 0) + 1
+}
 
 export async function writeRevision(db: Database, input: {
   entityType: EntityType
