@@ -38,6 +38,7 @@ import {
 } from '../db/schema'
 import { stripPrivate } from '../privacy/strip'
 import { dateOnly, iso, likePattern, pageWindow } from '../util'
+import { describeRevision } from './revision-summary'
 import { changedAtIso, hrefFor, revisionTitle } from './records'
 
 export type Viewer = { role: UserRole }
@@ -602,21 +603,212 @@ export async function dashboardStats(db: Database) {
   }
 }
 
+const recentLimit = 12
+
+type RecentEvent = {
+  id: string
+  entityType: EntityType
+  title: string
+  href: string
+  summary: string
+  occurredAt: string
+  at: number
+}
+
 export async function recentUpdates(db: Database) {
-  const rows = await db.select({
+  const revisions = await db.select({
     id: recordRevisions.id,
     entityType: recordRevisions.entityType,
     entityId: recordRevisions.entityId,
+    previousValues: recordRevisions.previousValues,
     newValues: recordRevisions.newValues,
     changedAt: recordRevisions.changedAt
-  }).from(recordRevisions).orderBy(desc(recordRevisions.changedAt)).limit(12)
-  return rows.map((row) => ({
-    id: row.id,
-    entityType: row.entityType as EntityType,
-    title: revisionTitle(row.newValues, row.entityType),
-    href: hrefFor(row.entityType, row.entityId),
-    occurredAt: changedAtIso(row.changedAt)
+  }).from(recordRevisions).orderBy(desc(recordRevisions.changedAt)).limit(40)
+  const covered = new Set(revisions.map((row) => `${row.entityType}:${row.entityId}`))
+  const events: RecentEvent[] = []
+  for (const row of revisions) {
+    const place = await resolvePlace(db, row.entityType, row.entityId, row.newValues)
+    events.push({
+      id: row.id,
+      entityType: row.entityType as EntityType,
+      title: place.title,
+      href: place.href,
+      summary: describeRevision(row.previousValues, row.newValues),
+      occurredAt: changedAtIso(row.changedAt),
+      at: row.changedAt.getTime()
+    })
+  }
+  await appendUnloggedActivity(db, covered, events)
+  events.sort((left, right) => right.at - left.at)
+  return events.slice(0, recentLimit).map((event) => ({
+    id: event.id,
+    entityType: event.entityType,
+    title: event.title,
+    href: event.href,
+    summary: event.summary,
+    occurredAt: event.occurredAt
   }))
+}
+
+async function resolvePlace(db: Database, entityType: string, entityId: string, fallback: Record<string, unknown>) {
+  const fallbackTitle = revisionTitle(fallback, entityType)
+  if (entityType === 'student') {
+    const rows = await db.select({ displayName: students.displayName }).from(students).where(eq(students.id, entityId)).limit(1)
+    return { title: rows[0]?.displayName ?? fallbackTitle, href: `/students/${entityId}` }
+  }
+  if (entityType === 'trait') {
+    const rows = await db.select({ title: traits.title }).from(traits).where(eq(traits.id, entityId)).limit(1)
+    return { title: rows[0]?.title ?? fallbackTitle, href: `/traits/${entityId}` }
+  }
+  if (entityType === 'evidence') {
+    const rows = await db.select({ summary: evidence.summary }).from(evidence).where(eq(evidence.id, entityId)).limit(1)
+    return { title: rows[0]?.summary ?? fallbackTitle, href: `/evidence/${entityId}` }
+  }
+  if (entityType === 'group') {
+    const rows = await db.select({ name: groups.name }).from(groups).where(eq(groups.id, entityId)).limit(1)
+    return { title: rows[0]?.name ?? fallbackTitle, href: `/groups/${entityId}` }
+  }
+  if (entityType === 'relationship') {
+    const rows = await db.select({
+      sourceType: relationships.sourceType,
+      sourceId: relationships.sourceId,
+      targetType: relationships.targetType,
+      targetId: relationships.targetId
+    }).from(relationships).where(eq(relationships.id, entityId)).limit(1)
+    const row = rows[0]
+    if (!row) return { title: fallbackTitle, href: `/relationships/${entityId}` }
+    const source = await labelFor(db, row.sourceType, row.sourceId)
+    const target = await labelFor(db, row.targetType, row.targetId)
+    return { title: `${source} → ${target}`, href: `/relationships/${entityId}` }
+  }
+  if (entityType === 'group_membership') {
+    const rows = await db.select({
+      groupId: groupMemberships.groupId,
+      studentId: groupMemberships.studentId
+    }).from(groupMemberships).where(eq(groupMemberships.id, entityId)).limit(1)
+    const row = rows[0]
+    if (!row) return { title: fallbackTitle, href: '/groups' }
+    const student = await labelFor(db, 'student', row.studentId)
+    const group = await labelFor(db, 'group', row.groupId)
+    return { title: `${student} in ${group}`, href: `/groups/${row.groupId}` }
+  }
+  if (entityType === 'trait_category') {
+    const rows = await db.select({ name: traitCategories.name }).from(traitCategories).where(eq(traitCategories.id, entityId)).limit(1)
+    return { title: rows[0]?.name ?? fallbackTitle, href: '/traits' }
+  }
+  if (entityType === 'relationship_type') {
+    const rows = await db.select({ name: relationshipTypes.name }).from(relationshipTypes).where(eq(relationshipTypes.id, entityId)).limit(1)
+    return { title: rows[0]?.name ?? fallbackTitle, href: '/relationships' }
+  }
+  if (entityType === 'group_role') {
+    const rows = await db.select({ name: groupRoles.name }).from(groupRoles).where(eq(groupRoles.id, entityId)).limit(1)
+    return { title: rows[0]?.name ?? fallbackTitle, href: '/groups' }
+  }
+  return { title: fallbackTitle, href: hrefFor(entityType, entityId) }
+}
+
+async function appendUnloggedActivity(db: Database, covered: Set<string>, events: RecentEvent[]) {
+  const studentRows = await db.select({
+    id: students.id,
+    createdAt: students.createdAt,
+    updatedAt: students.updatedAt,
+    archivedAt: students.archivedAt
+  }).from(students).orderBy(desc(students.updatedAt)).limit(20)
+  for (const row of studentRows) await remember(db, events, covered, 'student', row, row.archivedAt != null)
+
+  const groupRows = await db.select({
+    id: groups.id,
+    status: groups.status,
+    createdAt: groups.createdAt,
+    updatedAt: groups.updatedAt
+  }).from(groups).orderBy(desc(groups.updatedAt)).limit(20)
+  for (const row of groupRows) await remember(db, events, covered, 'group', row, row.status === 'archived')
+
+  const traitRows = await db.select({
+    id: traits.id,
+    status: traits.status,
+    createdAt: traits.createdAt,
+    updatedAt: traits.updatedAt
+  }).from(traits).orderBy(desc(traits.updatedAt)).limit(20)
+  for (const row of traitRows) await remember(db, events, covered, 'trait', row, row.status === 'archived')
+
+  const evidenceRows = await db.select({
+    id: evidence.id,
+    status: evidence.status,
+    createdAt: evidence.createdAt,
+    updatedAt: evidence.updatedAt
+  }).from(evidence).orderBy(desc(evidence.updatedAt)).limit(20)
+  for (const row of evidenceRows) await remember(db, events, covered, 'evidence', row, row.status === 'archived')
+
+  const relationshipRows = await db.select({
+    id: relationships.id,
+    status: relationships.status,
+    createdAt: relationships.createdAt,
+    updatedAt: relationships.updatedAt
+  }).from(relationships).orderBy(desc(relationships.updatedAt)).limit(20)
+  for (const row of relationshipRows) await remember(db, events, covered, 'relationship', row, row.status === 'archived')
+
+  const membershipRows = await db.select({
+    id: groupMemberships.id,
+    createdAt: groupMemberships.createdAt,
+    updatedAt: groupMemberships.updatedAt
+  }).from(groupMemberships).orderBy(desc(groupMemberships.updatedAt)).limit(20)
+  for (const row of membershipRows) await remember(db, events, covered, 'group_membership', row, false)
+
+  const categoryRows = await db.select({
+    id: traitCategories.id,
+    createdAt: traitCategories.createdAt,
+    updatedAt: traitCategories.updatedAt
+  }).from(traitCategories).orderBy(desc(traitCategories.updatedAt)).limit(20)
+  for (const row of categoryRows) await remember(db, events, covered, 'trait_category', row, false)
+
+  const typeRows = await db.select({
+    id: relationshipTypes.id,
+    createdAt: relationshipTypes.createdAt,
+    updatedAt: relationshipTypes.updatedAt
+  }).from(relationshipTypes).orderBy(desc(relationshipTypes.updatedAt)).limit(20)
+  for (const row of typeRows) await remember(db, events, covered, 'relationship_type', row, false)
+
+  const roleRows = await db.select({
+    id: groupRoles.id,
+    createdAt: groupRoles.createdAt,
+    updatedAt: groupRoles.updatedAt
+  }).from(groupRoles).orderBy(desc(groupRoles.updatedAt)).limit(20)
+  for (const row of roleRows) await remember(db, events, covered, 'group_role', row, false)
+}
+
+async function remember(
+  db: Database,
+  events: RecentEvent[],
+  covered: Set<string>,
+  entityType: EntityType,
+  row: { id: string; createdAt: Date; updatedAt: Date },
+  archived: boolean
+) {
+  if (covered.has(`${entityType}:${row.id}`)) return
+  const place = await resolvePlace(db, entityType, row.id, {})
+  const created = row.createdAt.getTime()
+  const updated = row.updatedAt.getTime()
+  events.push({
+    id: `added:${entityType}:${row.id}`,
+    entityType,
+    title: place.title,
+    href: place.href,
+    summary: 'Added record',
+    occurredAt: iso(row.createdAt),
+    at: created
+  })
+  if (updated - created > 1000) {
+    events.push({
+      id: `updated:${entityType}:${row.id}`,
+      entityType,
+      title: place.title,
+      href: place.href,
+      summary: archived ? 'Archived record' : 'Updated record',
+      occurredAt: iso(row.updatedAt),
+      at: updated
+    })
+  }
 }
 
 export async function listAccounts(db: Database) {

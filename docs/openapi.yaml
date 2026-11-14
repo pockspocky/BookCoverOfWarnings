@@ -708,11 +708,15 @@ paths:
       tags: [Search]
       responses:
         "200":
-          description: Recent approved revisions. No pending or rejected content.
+          description: |
+            Recent published additions and edits, newest first. Each item names where the change is and what changed.
+            The same list is returned to every signed-in user. It does not name the editor.
+            Pending and rejected submissions are omitted. Private self-description is omitted.
           content:
             application/json:
               schema:
                 type: array
+                maxItems: 12
                 items:
                   $ref: "#/components/schemas/RecentUpdate"
   /api/submissions:
@@ -2068,12 +2072,17 @@ components:
         relationships: { type: integer }
     RecentUpdate:
       type: object
-      required: [id, entityType, title, href, occurredAt]
+      required: [id, entityType, title, href, summary, occurredAt]
       properties:
         id: { type: string }
         entityType: { $ref: "#/components/schemas/EntityType" }
-        title: { type: string }
+        title:
+          type: string
+          description: Where the change is, as the published record name.
         href: { type: string }
+        summary:
+          type: string
+          description: What changed. Examples are "Added display name and graduation year" and "Updated general comment". Field values are not repeated.
         occurredAt: { type: string, format: date-time }
     AccountPage:
       type: object

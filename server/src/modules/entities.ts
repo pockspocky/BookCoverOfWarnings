@@ -18,7 +18,7 @@ import {
   traits
 } from '../db/schema'
 import { bindAttributes, consentForAttributes, subjectStudentId } from './fields'
-import { removeSearch, upsertSearch, writeRevision } from '../services/records'
+import { nextRevisionVersion, removeSearch, upsertSearch, writeRevision } from '../services/records'
 import { newId } from '../util'
 import type { EntityModule, SubmissionRow } from './types'
 
@@ -45,12 +45,17 @@ async function link(db: Database, traitId: string, evidenceId: string) {
     eq(traitEvidence.traitId, traitId),
     eq(traitEvidence.evidenceId, evidenceId)
   )).limit(1)
-  if (existing[0]) return
+  if (existing[0]) return false
   await db.insert(traitEvidence).values({ id: newId(), traitId, evidenceId, createdAt: new Date() })
+  return true
 }
 
-export async function attachTraitEvidence(db: Database, traitId: string, evidenceId: string) {
-  const traitRows = await db.select({ status: traits.status }).from(traits).where(eq(traits.id, traitId)).limit(1)
+export async function attachTraitEvidence(db: Database, traitId: string, evidenceId: string, actorId: string) {
+  const traitRows = await db.select({
+    title: traits.title,
+    status: traits.status,
+    currentVersion: traits.currentVersion
+  }).from(traits).where(eq(traits.id, traitId)).limit(1)
   const trait = traitRows[0]
   if (!trait) throw ApiError.notFound('Trait not found.')
   if (trait.status === 'archived') {
@@ -62,7 +67,22 @@ export async function attachTraitEvidence(db: Database, traitId: string, evidenc
   if (item.status === 'archived') {
     throw ApiError.validation('Archived evidence cannot be attached.', { evidenceId: ['Archived evidence cannot be attached.'] })
   }
-  await link(db, traitId, evidenceId)
+  const linked = await link(db, traitId, evidenceId)
+  if (!linked) return
+  await noteEvidenceLink(db, trait, traitId, actorId)
+}
+
+async function noteEvidenceLink(db: Database, trait: { title: string; currentVersion: number }, traitId: string, actorId: string) {
+  const version = trait.currentVersion + 1
+  await db.update(traits).set({ currentVersion: version, updatedAt: new Date() }).where(eq(traits.id, traitId))
+  await writeRevision(db, {
+    entityType: 'trait',
+    entityId: traitId,
+    version,
+    previousValues: { title: trait.title, evidenceLink: 'absent' },
+    newValues: { title: trait.title, evidenceLink: 'attached' },
+    actorId
+  })
 }
 
 async function projectStudent(db: Database, id: string) {
@@ -343,6 +363,18 @@ export const studentModule: EntityModule = {
         createdAt: now,
         updatedAt: now
       })
+      await writeRevision(db, {
+        entityType: 'student',
+        entityId: id,
+        version: 1,
+        previousValues: {},
+        newValues: {
+          displayName: data.displayName,
+          graduationYear: data.graduationYear,
+          generalComment: data.generalComment
+        },
+        actorId
+      })
       await bindAttributes(db, 'student', id, asRecord(submission.proposedData), submission.id)
       await projectStudent(db, id)
       return [id]
@@ -458,6 +490,19 @@ export const traitModule: EntityModule = {
         updatedAt: now
       })
       for (const evidenceId of data.evidenceIds ?? []) await link(db, id, evidenceId)
+      await writeRevision(db, {
+        entityType: 'trait',
+        entityId: id,
+        version: 1,
+        previousValues: {},
+        newValues: {
+          title: data.title,
+          description: data.description ?? null,
+          categoryId: data.categoryId,
+          ...(data.evidenceIds?.length ? { evidenceLink: 'attached' } : {})
+        },
+        actorId
+      })
       await bindAttributes(db, 'trait', id, asRecord(submission.proposedData), submission.id)
       await projectTrait(db, id)
       return [id]
@@ -537,9 +582,9 @@ export const evidenceModule: EntityModule = {
   async currentVersion() {
     return null
   },
-  async apply(db, submission) {
+  async apply(db, submission, actorId) {
     if (submission.operation === 'archive' && submission.targetEntityId) {
-      await this.archiveById(db, submission.targetEntityId, submission.submitterUserId)
+      await this.archiveById(db, submission.targetEntityId, actorId)
       return [submission.targetEntityId]
     }
     if (submission.operation === 'create') {
@@ -547,19 +592,43 @@ export const evidenceModule: EntityModule = {
       const id = newId()
       const now = new Date()
       const administrator = await publishedByAdministrator(db, submission.submitterUserId)
+      const verificationStatus = administrator ? 'verified' : 'pending'
       await db.insert(evidence).values({
         id,
         providerUserId: submission.submitterUserId,
         summary: data.summary,
         evidenceDate: data.evidenceDate,
         urls: data.urls,
-        verificationStatus: administrator ? 'verified' : 'pending',
+        verificationStatus,
         reliabilityScore: baseReliability,
         status: 'active',
         createdAt: now,
         updatedAt: now
       })
-      for (const traitId of data.traitIds ?? []) await link(db, traitId, id)
+      for (const traitId of data.traitIds ?? []) {
+        const linked = await link(db, traitId, id)
+        if (!linked) continue
+        const traitRows = await db.select({
+          title: traits.title,
+          status: traits.status,
+          currentVersion: traits.currentVersion
+        }).from(traits).where(eq(traits.id, traitId)).limit(1)
+        const trait = traitRows[0]
+        if (trait && trait.status !== 'archived') await noteEvidenceLink(db, trait, traitId, actorId)
+      }
+      await writeRevision(db, {
+        entityType: 'evidence',
+        entityId: id,
+        version: 1,
+        previousValues: {},
+        newValues: {
+          summary: data.summary,
+          evidenceDate: data.evidenceDate,
+          urls: data.urls,
+          verificationStatus
+        },
+        actorId
+      })
       await bindAttributes(db, 'evidence', id, asRecord(submission.proposedData), submission.id)
       await projectEvidence(db, id)
       return [id]
@@ -574,20 +643,45 @@ export const evidenceModule: EntityModule = {
     }).from(evidence).where(eq(evidence.id, id)).limit(1)
     const current = rows[0]
     if (!current) throw ApiError.notFound()
-    await db.update(evidence).set({
+    const next = {
       summary: data.summary ?? current.summary,
       evidenceDate: data.evidenceDate ?? current.evidenceDate,
-      urls: data.urls ?? current.urls,
-      updatedAt: new Date()
-    }).where(eq(evidence.id, id))
+      urls: data.urls ?? current.urls
+    }
+    await db.update(evidence).set({ ...next, updatedAt: new Date() }).where(eq(evidence.id, id))
+    await writeRevision(db, {
+      entityType: 'evidence',
+      entityId: id,
+      version: await nextRevisionVersion(db, 'evidence', id),
+      previousValues: {
+        summary: current.summary,
+        evidenceDate: current.evidenceDate,
+        urls: current.urls
+      },
+      newValues: next,
+      actorId
+    })
     await bindAttributes(db, 'evidence', id, asRecord(submission.proposedData), submission.id)
     await projectEvidence(db, id)
     return [id]
   },
-  async archiveById(db, id) {
-    const rows = await db.select({ status: evidence.status }).from(evidence).where(eq(evidence.id, id)).limit(1)
-    if (!rows[0]) throw ApiError.notFound()
+  async archiveById(db, id, actorId) {
+    const rows = await db.select({
+      summary: evidence.summary,
+      status: evidence.status
+    }).from(evidence).where(eq(evidence.id, id)).limit(1)
+    const row = rows[0]
+    if (!row) throw ApiError.notFound()
+    if (row.status === 'archived') return
     await db.update(evidence).set({ status: 'archived', updatedAt: new Date() }).where(eq(evidence.id, id))
+    await writeRevision(db, {
+      entityType: 'evidence',
+      entityId: id,
+      version: await nextRevisionVersion(db, 'evidence', id),
+      previousValues: { summary: row.summary, status: row.status },
+      newValues: { summary: row.summary, status: 'archived' },
+      actorId
+    })
     await removeSearch(db, 'evidence', id)
   }
 }
@@ -680,7 +774,7 @@ export async function patchGroup(db: Database, id: string, payload: { name?: str
   await projectGroup(db, id)
 }
 
-async function resolveMembershipRole(db: Database, data: { roleId?: string; roleName?: string }) {
+async function resolveMembershipRole(db: Database, data: { roleId?: string; roleName?: string }, actorId: string) {
   if (data.roleId) {
     const role = await db.select({ id: groupRoles.id }).from(groupRoles).where(eq(groupRoles.id, data.roleId)).limit(1)
     if (!role[0]) throw ApiError.validation('Unknown role.', { roleId: ['Unknown role.'] })
@@ -690,7 +784,7 @@ async function resolveMembershipRole(db: Database, data: { roleId?: string; role
   if (!name) throw ApiError.validation('A role is required.', { roleName: ['A role is required.'] })
   const existing = await db.select({ id: groupRoles.id }).from(groupRoles).where(sql`lower(${groupRoles.name}) = ${name.toLowerCase()}`).limit(1)
   if (existing[0]) return existing[0].id
-  return insertGroupRole(db, { name, description: '' })
+  return insertGroupRole(db, { name, description: '' }, actorId)
 }
 
 export const membershipModule: EntityModule = {
@@ -712,32 +806,41 @@ export const membershipModule: EntityModule = {
     await requireStudent(db, data.studentId)
     const group = await db.select({ id: groups.id }).from(groups).where(eq(groups.id, data.groupId)).limit(1)
     if (!group[0]) throw ApiError.validation('Unknown group.', { groupId: ['Unknown group.'] })
-    const roleId = await resolveMembershipRole(db, data)
+    const roleId = await resolveMembershipRole(db, data, actorId)
     const id = newId()
     const now = new Date()
+    const endDate = data.endDate ?? null
     await db.insert(groupMemberships).values({
       id,
       groupId: data.groupId,
       studentId: data.studentId,
       roleId,
       startDate: data.startDate,
-      endDate: data.endDate ?? null,
+      endDate,
       createdAt: now,
       updatedAt: now
     })
+    await writeRevision(db, {
+      entityType: 'group_membership',
+      entityId: id,
+      version: 1,
+      previousValues: {},
+      newValues: { roleId, startDate: data.startDate, endDate },
+      actorId
+    })
     return [id]
   },
-  async archiveById(db, id) {
-    const rows = await db.select({ id: groupMemberships.id }).from(groupMemberships).where(eq(groupMemberships.id, id)).limit(1)
-    if (!rows[0]) throw ApiError.notFound()
-    await db.update(groupMemberships).set({ endDate: new Date().toISOString().slice(0, 10), updatedAt: new Date() }).where(eq(groupMemberships.id, id))
+  async archiveById(db, id, actorId) {
+    const today = new Date().toISOString().slice(0, 10)
+    await endMembership(db, id, today, actorId)
   }
 }
 
-export async function endMembership(db: Database, id: string, endDate: string) {
+export async function endMembership(db: Database, id: string, endDate: string, actorId: string) {
   const rows = await db.select({
     id: groupMemberships.id,
-    startDate: groupMemberships.startDate
+    startDate: groupMemberships.startDate,
+    endDate: groupMemberships.endDate
   }).from(groupMemberships).where(eq(groupMemberships.id, id)).limit(1)
   const row = rows[0]
   if (!row) throw ApiError.notFound()
@@ -745,14 +848,22 @@ export async function endMembership(db: Database, id: string, endDate: string) {
     throw ApiError.validation('End date cannot be before the start date.', { endDate: ['End date cannot be before the start date.'] })
   }
   await db.update(groupMemberships).set({ endDate, updatedAt: new Date() }).where(eq(groupMemberships.id, id))
+  await writeRevision(db, {
+    entityType: 'group_membership',
+    entityId: id,
+    version: await nextRevisionVersion(db, 'group_membership', id),
+    previousValues: { endDate: row.endDate },
+    newValues: { endDate },
+    actorId
+  })
 }
 
-async function resolveRelationshipType(db: Database, data: { relationshipTypeId?: string; relationshipTypeName?: string }) {
+async function resolveRelationshipType(db: Database, data: { relationshipTypeId?: string; relationshipTypeName?: string }, actorId: string) {
   const name = data.relationshipTypeName?.trim() ?? ''
   if (name) {
     const existing = await db.select({ id: relationshipTypes.id }).from(relationshipTypes).where(sql`lower(${relationshipTypes.name}) = ${name.toLowerCase()}`).limit(1)
     if (existing[0]) return existing[0].id
-    return insertRelationshipType(db, { name, description: '', category: '' })
+    return insertRelationshipType(db, { name, description: '', category: '' }, actorId)
   }
   if (data.relationshipTypeId) {
     const type = await db.select({ id: relationshipTypes.id }).from(relationshipTypes).where(eq(relationshipTypes.id, data.relationshipTypeId)).limit(1)
@@ -792,9 +903,11 @@ export const relationshipModule: EntityModule = {
       const data = createRelationshipSchema.parse(submission.proposedData)
       await assertEndpoint(db, data.sourceType, data.sourceId)
       await assertEndpoint(db, data.targetType, data.targetId)
-      const relationshipTypeId = await resolveRelationshipType(db, data)
+      const relationshipTypeId = await resolveRelationshipType(db, data, actorId)
       const id = newId()
       const now = new Date()
+      const startDate = nullableDate(data.startDate)
+      const endDate = nullableDate(data.endDate)
       await db.insert(relationships).values({
         id,
         sourceType: data.sourceType,
@@ -803,12 +916,25 @@ export const relationshipModule: EntityModule = {
         targetId: data.targetId,
         relationshipTypeId,
         generalComment: data.generalComment,
-        startDate: nullableDate(data.startDate),
-        endDate: nullableDate(data.endDate),
+        startDate,
+        endDate,
         status: 'active',
         currentVersion: 1,
         createdAt: now,
         updatedAt: now
+      })
+      await writeRevision(db, {
+        entityType: 'relationship',
+        entityId: id,
+        version: 1,
+        previousValues: {},
+        newValues: {
+          generalComment: data.generalComment,
+          startDate,
+          endDate,
+          relationshipTypeId
+        },
+        actorId
       })
       await bindAttributes(db, 'relationship', id, asRecord(submission.proposedData), submission.id)
       await projectRelationship(db, id)
@@ -906,14 +1032,22 @@ export const categoryModule = vocabulary('trait_category', 'Categories are maint
 export const relationshipTypeModule = vocabulary('relationship_type', 'Relationship types are maintained by administrators and are not published from the submission queue.')
 export const groupRoleModule = vocabulary('group_role', 'Group roles are maintained by administrators and are not published from the submission queue.')
 
-export async function insertCategory(db: Database, payload: { name: string; description: string }) {
+export async function insertCategory(db: Database, payload: { name: string; description: string }, actorId: string) {
   const id = newId()
   const now = new Date()
   await db.insert(traitCategories).values({ id, name: payload.name, description: payload.description, isActive: true, createdAt: now, updatedAt: now })
+  await writeRevision(db, {
+    entityType: 'trait_category',
+    entityId: id,
+    version: 1,
+    previousValues: {},
+    newValues: { name: payload.name, description: payload.description },
+    actorId
+  })
   return id
 }
 
-export async function patchCategory(db: Database, id: string, payload: { name?: string; description?: string; isActive?: boolean }) {
+export async function patchCategory(db: Database, id: string, payload: { name?: string; description?: string; isActive?: boolean }, actorId: string) {
   const rows = await db.select({
     name: traitCategories.name,
     description: traitCategories.description,
@@ -921,15 +1055,23 @@ export async function patchCategory(db: Database, id: string, payload: { name?: 
   }).from(traitCategories).where(eq(traitCategories.id, id)).limit(1)
   const current = rows[0]
   if (!current) throw ApiError.notFound()
-  await db.update(traitCategories).set({
+  const next = {
     name: payload.name ?? current.name,
     description: payload.description ?? current.description,
-    isActive: payload.isActive ?? current.isActive,
-    updatedAt: new Date()
-  }).where(eq(traitCategories.id, id))
+    isActive: payload.isActive ?? current.isActive
+  }
+  await db.update(traitCategories).set({ ...next, updatedAt: new Date() }).where(eq(traitCategories.id, id))
+  await writeRevision(db, {
+    entityType: 'trait_category',
+    entityId: id,
+    version: await nextRevisionVersion(db, 'trait_category', id),
+    previousValues: current,
+    newValues: next,
+    actorId
+  })
 }
 
-export async function insertRelationshipType(db: Database, payload: { name: string; description: string; category: string }) {
+export async function insertRelationshipType(db: Database, payload: { name: string; description: string; category: string }, actorId: string) {
   const id = newId()
   const now = new Date()
   await db.insert(relationshipTypes).values({
@@ -941,10 +1083,18 @@ export async function insertRelationshipType(db: Database, payload: { name: stri
     createdAt: now,
     updatedAt: now
   })
+  await writeRevision(db, {
+    entityType: 'relationship_type',
+    entityId: id,
+    version: 1,
+    previousValues: {},
+    newValues: { name: payload.name, description: payload.description, category: payload.category },
+    actorId
+  })
   return id
 }
 
-export async function patchRelationshipType(db: Database, id: string, payload: { name?: string; description?: string; category?: string; isActive?: boolean }) {
+export async function patchRelationshipType(db: Database, id: string, payload: { name?: string; description?: string; category?: string; isActive?: boolean }, actorId: string) {
   const rows = await db.select({
     name: relationshipTypes.name,
     description: relationshipTypes.description,
@@ -953,23 +1103,39 @@ export async function patchRelationshipType(db: Database, id: string, payload: {
   }).from(relationshipTypes).where(eq(relationshipTypes.id, id)).limit(1)
   const current = rows[0]
   if (!current) throw ApiError.notFound()
-  await db.update(relationshipTypes).set({
+  const next = {
     name: payload.name ?? current.name,
     description: payload.description ?? current.description,
     category: payload.category ?? current.category,
-    isActive: payload.isActive ?? current.isActive,
-    updatedAt: new Date()
-  }).where(eq(relationshipTypes.id, id))
+    isActive: payload.isActive ?? current.isActive
+  }
+  await db.update(relationshipTypes).set({ ...next, updatedAt: new Date() }).where(eq(relationshipTypes.id, id))
+  await writeRevision(db, {
+    entityType: 'relationship_type',
+    entityId: id,
+    version: await nextRevisionVersion(db, 'relationship_type', id),
+    previousValues: current,
+    newValues: next,
+    actorId
+  })
 }
 
-export async function insertGroupRole(db: Database, payload: { name: string; description: string }) {
+export async function insertGroupRole(db: Database, payload: { name: string; description: string }, actorId: string) {
   const id = newId()
   const now = new Date()
   await db.insert(groupRoles).values({ id, name: payload.name, description: payload.description, isActive: true, createdAt: now, updatedAt: now })
+  await writeRevision(db, {
+    entityType: 'group_role',
+    entityId: id,
+    version: 1,
+    previousValues: {},
+    newValues: { name: payload.name, description: payload.description },
+    actorId
+  })
   return id
 }
 
-export async function patchGroupRole(db: Database, id: string, payload: { name?: string; description?: string; isActive?: boolean }) {
+export async function patchGroupRole(db: Database, id: string, payload: { name?: string; description?: string; isActive?: boolean }, actorId: string) {
   const rows = await db.select({
     name: groupRoles.name,
     description: groupRoles.description,
@@ -977,17 +1143,42 @@ export async function patchGroupRole(db: Database, id: string, payload: { name?:
   }).from(groupRoles).where(eq(groupRoles.id, id)).limit(1)
   const current = rows[0]
   if (!current) throw ApiError.notFound()
-  await db.update(groupRoles).set({
+  const next = {
     name: payload.name ?? current.name,
     description: payload.description ?? current.description,
-    isActive: payload.isActive ?? current.isActive,
-    updatedAt: new Date()
-  }).where(eq(groupRoles.id, id))
+    isActive: payload.isActive ?? current.isActive
+  }
+  await db.update(groupRoles).set({ ...next, updatedAt: new Date() }).where(eq(groupRoles.id, id))
+  await writeRevision(db, {
+    entityType: 'group_role',
+    entityId: id,
+    version: await nextRevisionVersion(db, 'group_role', id),
+    previousValues: current,
+    newValues: next,
+    actorId
+  })
 }
 
-export async function verifyEvidence(db: Database, id: string, verificationStatus: string, reliabilityScore: number | null) {
-  const rows = await db.select({ id: evidence.id }).from(evidence).where(eq(evidence.id, id)).limit(1)
-  if (!rows[0]) throw ApiError.notFound()
+export async function verifyEvidence(db: Database, id: string, verificationStatus: string, reliabilityScore: number | null, actorId: string) {
+  const rows = await db.select({
+    summary: evidence.summary,
+    verificationStatus: evidence.verificationStatus,
+    reliabilityScore: evidence.reliabilityScore
+  }).from(evidence).where(eq(evidence.id, id)).limit(1)
+  const current = rows[0]
+  if (!current) throw ApiError.notFound()
   await db.update(evidence).set({ verificationStatus, reliabilityScore, updatedAt: new Date() }).where(eq(evidence.id, id))
+  await writeRevision(db, {
+    entityType: 'evidence',
+    entityId: id,
+    version: await nextRevisionVersion(db, 'evidence', id),
+    previousValues: {
+      summary: current.summary,
+      verificationStatus: current.verificationStatus,
+      reliabilityScore: current.reliabilityScore
+    },
+    newValues: { summary: current.summary, verificationStatus, reliabilityScore },
+    actorId
+  })
   await projectEvidence(db, id)
 }
