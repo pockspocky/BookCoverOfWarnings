@@ -1,0 +1,1 @@
+import{t as e}from"./BHp9O4Xh.js";import{P as t,R as n,_ as r,f as i}from"./b_HlIA_L.js";import{t as a}from"#entry";var o={},s={class:`flex min-h-screen items-center justify-center bg-ink-950 p-6`};function c(a,o){let c=e;return t(),i(`div`,s,[n(a.$slots,`default`),r(c)])}var l=a(o,[[`render`,c]]);export{l as default};

@@ -1,0 +1,1 @@
+import{c as e}from"./Dz6j2S-3.js";import{H as t,P as n,f as r,y as i}from"./b_HlIA_L.js";var a={class:`text-sm text-ink-400`},o=i({__name:`groups`,async setup(i){let o,s;return[o,s]=t(()=>e(`/groups`,{replace:!0})),await o,s(),(e,t)=>(n(),r(`p`,a,`Opening the group directory.`))}});export{o as default};
