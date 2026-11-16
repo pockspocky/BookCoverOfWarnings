@@ -712,6 +712,7 @@ paths:
             Recent published additions and edits, newest first. Each item names where the change is and what changed.
             The same list is returned to every signed-in user. It does not name the editor.
             Pending and rejected submissions are omitted. Private self-description is omitted.
+            Authorizing an evidence file is included as an attachment change and does not include the file name.
           content:
             application/json:
               schema:

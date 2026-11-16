@@ -5,9 +5,11 @@ import { ApiError } from '../../../lib/types/errors'
 import type { Actor } from '../auth/actor'
 import type { Database } from '../db/client'
 import { evidence, evidenceAttachments, uploadTickets } from '../db/schema'
+import { runInTransaction } from '../db/tx'
 import type { Env } from '../env'
 import { iso, newId } from '../util'
 import { hashSecret, newSecret } from '../auth/tokens'
+import { nextRevisionVersion, writeRevision } from './records'
 
 export interface ObjectStorage {
   ensureBucket(): Promise<void>
@@ -89,32 +91,44 @@ export async function authorizeUpload(db: Database, storage: ObjectStorage, scan
   const contentType = String(payload.contentType ?? '')
   const sizeBytes = Number(payload.sizeBytes)
   await scanner.inspect({ fileName, contentType, sizeBytes })
-  const rows = await db.select({ id: evidence.id, status: evidence.status }).from(evidence).where(eq(evidence.id, evidenceId)).limit(1)
-  if (!rows[0] || rows[0].status === 'archived') throw ApiError.notFound('Evidence not found.')
+  const rows = await db.select({ id: evidence.id, summary: evidence.summary, status: evidence.status }).from(evidence).where(eq(evidence.id, evidenceId)).limit(1)
+  const record = rows[0]
+  if (!record || record.status === 'archived') throw ApiError.notFound('Evidence not found.')
   const attachmentId = newId()
   const objectKey = `attachments/${evidenceId}/${attachmentId}`
   const expiresAt = new Date(Date.now() + 5 * 60 * 1000)
-  await db.insert(evidenceAttachments).values({
-    id: attachmentId,
-    evidenceId,
-    fileName,
-    contentType,
-    sizeBytes,
-    authorized: true,
-    objectKey,
-    createdAt: new Date()
-  })
   const uploadToken = newSecret()
-  await db.insert(uploadTickets).values({
-    id: newId(),
-    tokenHash: hashSecret(uploadToken),
-    evidenceId,
-    attachmentId,
-    accountId: actor.id,
-    expiresAt,
-    createdAt: new Date()
-  })
   const url = await storage.presignPut(objectKey, contentType, sizeBytes)
+  await runInTransaction(db, async (tx) => {
+    await tx.insert(evidenceAttachments).values({
+      id: attachmentId,
+      evidenceId,
+      fileName,
+      contentType,
+      sizeBytes,
+      authorized: true,
+      objectKey,
+      createdAt: new Date()
+    })
+    await tx.insert(uploadTickets).values({
+      id: newId(),
+      tokenHash: hashSecret(uploadToken),
+      evidenceId,
+      attachmentId,
+      accountId: actor.id,
+      expiresAt,
+      createdAt: new Date()
+    })
+    await tx.update(evidence).set({ updatedAt: new Date() }).where(eq(evidence.id, evidenceId))
+    await writeRevision(tx, {
+      entityType: 'evidence',
+      entityId: evidenceId,
+      version: await nextRevisionVersion(tx, 'evidence', evidenceId),
+      previousValues: { summary: record.summary, attachment: 'absent' },
+      newValues: { summary: record.summary, attachment: 'added' },
+      actorId: actor.id
+    })
+  })
   return { uploadToken, expiresAt: iso(expiresAt), url, method: 'PUT' as const }
 }
 

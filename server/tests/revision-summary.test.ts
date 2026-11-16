@@ -41,4 +41,13 @@ describe('describeRevision', () => {
   it('says the record was updated when the stored fields did not change', () => {
     expect(describeRevision({ title: 'Leadership' }, { title: 'Leadership' })).toBe('Updated record')
   })
+
+  it('names an attachment change without the file name', () => {
+    const summary = describeRevision(
+      { summary: 'Lab note', attachment: 'absent' },
+      { summary: 'Lab note', attachment: 'added' }
+    )
+    expect(summary).toBe('Updated attachment')
+    expect(summary).not.toContain('added')
+  })
 })

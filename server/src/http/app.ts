@@ -205,6 +205,10 @@ export function createApp(deps: AppDeps) {
     allowHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
     exposeHeaders: ['Retry-After']
   }))
+  app.use('*', async (c, next) => {
+    await next()
+    c.res.headers.set('Cache-Control', 'private, no-store')
+  })
   app.onError((err, c) => {
     if (err instanceof RateLimitError) c.header('Retry-After', String(err.retryAfter))
     if (err instanceof ApiError) {
