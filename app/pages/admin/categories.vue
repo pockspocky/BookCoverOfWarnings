@@ -9,9 +9,25 @@
         <button class="bg-accent px-3 py-1 text-sm text-accent-fg" type="submit">Add category</button>
       </form>
       <ul class="space-y-2 text-sm">
-        <li v-for="category in categories" :key="category.id" class="flex items-center justify-between border border-panel-border px-3 py-2">
-          <span>{{ category.name }} <span class="mono-meta">{{ category.isActive ? 'active' : 'inactive' }}</span></span>
-          <button class="text-xs underline" type="button" @click="toggleCategory(category)">{{ category.isActive ? 'Deactivate' : 'Activate' }}</button>
+        <li v-for="category in categories" :key="category.id" class="flex items-center justify-between gap-3 border border-panel-border px-3 py-2">
+          <input
+            v-if="editingId === category.id"
+            v-model="editingName"
+            class="min-w-0 flex-1 border border-panel-border bg-panel px-2 py-1"
+            aria-label="Edit category name"
+            maxlength="200"
+            required
+            autofocus
+            @keydown.enter.prevent="saveCategoryName(category)"
+            @keydown.escape="cancelEdit"
+          />
+          <span v-else class="min-w-0">{{ category.name }} <span class="mono-meta">{{ category.isActive ? 'active' : 'inactive' }}</span></span>
+          <span class="flex shrink-0 items-center gap-3">
+            <button v-if="editingId === category.id" class="text-xs underline" type="button" :disabled="savingId === category.id" @click="saveCategoryName(category)">Save</button>
+            <button v-if="editingId === category.id" class="text-xs underline" type="button" @click="cancelEdit">Cancel</button>
+            <button v-else class="text-xs underline" type="button" @click="startEdit(category)">Edit</button>
+            <button class="text-xs underline" type="button" @click="toggleCategory(category)">{{ category.isActive ? 'Deactivate' : 'Activate' }}</button>
+          </span>
         </li>
       </ul>
     </section>
@@ -51,6 +67,9 @@ const types = ref<Awaited<ReturnType<typeof $api.relationships.types>>>([])
 const roles = ref<Awaited<ReturnType<typeof $api.groups.roles>>>([])
 const categoryName = ref('')
 const categoryDescription = ref('')
+const editingId = ref<string | null>(null)
+const editingName = ref('')
+const savingId = ref<string | null>(null)
 const typeName = ref('')
 const typeCategory = ref('')
 const typeDescription = ref('')
@@ -74,6 +93,39 @@ async function addCategory() {
     await load()
   } catch (err) {
     toasts.push(errorMessage(err), 'error')
+  }
+}
+
+function startEdit(category: (typeof categories.value)[number]) {
+  editingId.value = category.id
+  editingName.value = category.name
+}
+
+function cancelEdit() {
+  editingId.value = null
+  editingName.value = ''
+}
+
+async function saveCategoryName(category: (typeof categories.value)[number]) {
+  const name = editingName.value.trim()
+  if (!name) {
+    toasts.push('Category name is required.', 'error')
+    return
+  }
+  if (name === category.name) {
+    cancelEdit()
+    return
+  }
+  savingId.value = category.id
+  try {
+    await $api.admin.patchCategory(category.id, { name })
+    cancelEdit()
+    toasts.push('Category updated.', 'success')
+    await load()
+  } catch (err) {
+    toasts.push(errorMessage(err), 'error')
+  } finally {
+    savingId.value = null
   }
 }
 
