@@ -180,5 +180,5 @@ export async function archiveAdminRecord(db: Database, actor: Actor, entityType:
 
 export async function endAdminMembership(db: Database, actor: Actor, id: string, endDate: string) {
   requireAdministrator(actor)
-  await endMembership(db, id, endDate)
+  await endMembership(db, id, endDate, actor.id)
 }

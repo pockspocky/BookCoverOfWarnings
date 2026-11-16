@@ -91,6 +91,7 @@ export class HttpApiClient implements ApiClient {
         method,
         headers,
         credentials: 'include',
+        cache: 'no-store',
         body: body === undefined ? undefined : JSON.stringify(body)
       })
     } catch {

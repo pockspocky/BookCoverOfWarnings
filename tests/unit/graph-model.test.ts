@@ -53,7 +53,13 @@ describe('directory graph forces', () => {
       { id: 'ab', source: 'a', target: 'b' },
       { id: 'ba', source: 'b', target: 'a' }
     ])
-    expect((mutual.get('ab') ?? 0) * (mutual.get('ba') ?? 0)).toBeLessThan(0)
+    const forward = edgeSegment({ x: 0, y: 0 }, { x: 200, y: 0 }, 10, 10, mutual.get('ab') ?? 0, 8)
+    const back = edgeSegment({ x: 200, y: 0 }, { x: 0, y: 0 }, 10, 10, mutual.get('ba') ?? 0, 8)
+    expect(forward).not.toBeNull()
+    expect(back).not.toBeNull()
+    expect(forward?.y1).toBeGreaterThan(8)
+    expect(back?.y1).toBeLessThan(-8)
+    expect(forward?.y1).toBeCloseTo(-(back?.y1 ?? 0))
   })
 
   it('stops a directed segment at the node rims', () => {

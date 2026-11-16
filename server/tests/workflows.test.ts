@@ -1281,4 +1281,291 @@ describe('API workflows', () => {
       expect(await db.select({ id: traitEvidence.id }).from(traitEvidence).where(eq(traitEvidence.traitId, traitId))).toHaveLength(1)
     })
   })
+
+  it('lists where and what changed for every signed-in user, without the editor or unpublished text', async () => {
+    await inTx(async () => {
+      const matchedId = await insertStudent('Roster Student')
+      await insertAccount('recent-member@northbridge.test', 'member', matchedId)
+      await insertAccount('recent-admin@northbridge.test', 'administrator', null)
+      const member = await login('recent-member@northbridge.test')
+      const admin = await login('recent-admin@northbridge.test')
+      const anonymous = await login('', '')
+
+      const created = await app.request('/api/admin/students', {
+        method: 'POST',
+        headers: auth(admin.token),
+        body: JSON.stringify({ displayName: 'Recent Student', graduationYear: 2026, generalComment: 'Hello' })
+      })
+      expect(created.status).toBe(200)
+      const studentId = (await created.json() as { data: { id: string } }).data.id
+      const patched = await app.request(`/api/admin/students/${studentId}`, {
+        method: 'PATCH',
+        headers: auth(admin.token),
+        body: JSON.stringify({ generalComment: 'Hello again', baseVersion: 1 })
+      })
+      expect(patched.status).toBe(200)
+
+      const evidenceResponse = await app.request('/api/admin/evidence', {
+        method: 'POST',
+        headers: auth(admin.token),
+        body: JSON.stringify({ summary: 'Lab note', evidenceDate: '2026-03-01', urls: [] })
+      })
+      expect(evidenceResponse.status).toBe(200)
+      const evidenceId = (await evidenceResponse.json() as { data: { id: string } }).data.id
+      const evidencePatch = await app.request(`/api/admin/evidence/${evidenceId}`, {
+        method: 'PATCH',
+        headers: auth(admin.token),
+        body: JSON.stringify({ summary: 'Lab note revised' })
+      })
+      expect(evidencePatch.status).toBe(200)
+
+      const queued = await app.request('/api/submissions', {
+        method: 'POST',
+        headers: auth(member.token),
+        body: JSON.stringify({
+          entityType: 'student',
+          operation: 'correction',
+          targetEntityId: studentId,
+          baseVersion: 2,
+          proposedData: { generalComment: 'pending-only-note' }
+        })
+      })
+      expect(queued.status).toBe(200)
+
+      const memberFeed = await (await app.request('/api/dashboard/recent', { headers: auth(member.token) })).json() as Array<{ entityType: string; title: string; summary: string; href: string }>
+      const adminFeed = await (await app.request('/api/dashboard/recent', { headers: auth(admin.token) })).json() as Array<{ entityType: string; title: string; summary: string; href: string }>
+      const anonymousFeed = await (await app.request('/api/dashboard/recent', { headers: auth(anonymous.token) })).json()
+      expect((await app.request('/api/dashboard/recent')).status).toBe(401)
+      expect(adminFeed).toEqual(memberFeed)
+      expect(anonymousFeed).toEqual(memberFeed)
+
+      const studentEvents = memberFeed.filter((item) => item.title === 'Recent Student')
+      expect(studentEvents.map((item) => item.entityType)).toEqual(['student', 'student'])
+      expect(studentEvents.map((item) => item.summary)).toEqual(expect.arrayContaining([
+        'Updated general comment',
+        'Added display name, graduation year, and general comment'
+      ]))
+      expect(studentEvents.every((item) => item.href === `/students/${studentId}`)).toBe(true)
+
+      const evidenceEvents = memberFeed.filter((item) => item.title === 'Lab note revised')
+      expect(evidenceEvents.map((item) => item.summary)).toEqual(expect.arrayContaining([
+        'Updated summary',
+        'Added summary, evidence date, and verification'
+      ]))
+      expect(evidenceEvents).toHaveLength(2)
+      expect(evidenceEvents.every((item) => item.href === `/evidence/${evidenceId}`)).toBe(true)
+
+      const serialized = JSON.stringify(memberFeed)
+      expect(serialized).not.toContain('pending-only-note')
+      expect(serialized).not.toContain('Hello again')
+      expect(serialized).not.toContain('recent-admin@northbridge.test')
+      expect(serialized).not.toContain('changedBy')
+      expect(serialized).not.toContain('sexual')
+    })
+  })
+
+  it('posts every published directory action, including a new trait, and skips private or pending text', async () => {
+    await inTx(async () => {
+      const studentId = await insertStudent('Feed Student')
+      await insertAccount('feed-member@northbridge.test', 'member', studentId)
+      await insertAccount('feed-admin@northbridge.test', 'administrator', null)
+      const member = await login('feed-member@northbridge.test')
+      const admin = await login('feed-admin@northbridge.test')
+      const anonymous = await login('', '')
+
+      async function feed() {
+        const response = await app.request('/api/dashboard/recent', { headers: auth(member.token) })
+        expect(response.status).toBe(200)
+        expect(response.headers.get('cache-control')).toContain('no-store')
+        const body = await response.json() as Array<{ entityType: string; title: string; summary: string; href: string }>
+        const adminBody = await (await app.request('/api/dashboard/recent', { headers: auth(admin.token) })).json()
+        const anonymousBody = await (await app.request('/api/dashboard/recent', { headers: auth(anonymous.token) })).json()
+        expect(adminBody).toEqual(body)
+        expect(anonymousBody).toEqual(body)
+        return body
+      }
+
+      const category = await app.request('/api/admin/categories', {
+        method: 'POST',
+        headers: auth(admin.token),
+        body: JSON.stringify({ name: 'Feed Category', description: 'Visible category' })
+      })
+      expect(category.status).toBe(200)
+      const categoryId = (await category.json() as { data: { id: string } }).data.id
+      expect((await feed()).some((item) => item.entityType === 'trait_category' && item.title === 'Feed Category' && item.summary === 'Added name and description')).toBe(true)
+
+      const trait = await app.request('/api/admin/traits', {
+        method: 'POST',
+        headers: auth(admin.token),
+        body: JSON.stringify({ studentId, categoryId, title: 'Feed Trait', description: null })
+      })
+      const traitBody = await trait.json() as { data?: { id: string; currentVersion?: number }; message?: string }
+      expect(trait.status, JSON.stringify(traitBody)).toBe(200)
+      const traitId = traitBody.data?.id ?? ''
+      const afterTrait = await feed()
+      expect(afterTrait.some((item) => item.entityType === 'trait' && item.title === 'Feed Trait · Feed Student' && item.summary === 'Added title and category' && item.href === `/traits/${traitId}`)).toBe(true)
+
+      const patched = await app.request(`/api/admin/traits/${traitId}`, {
+        method: 'PATCH',
+        headers: auth(admin.token),
+        body: JSON.stringify({ description: 'A public description', baseVersion: traitBody.data?.currentVersion })
+      })
+      expect(patched.status).toBe(200)
+      expect((await feed()).some((item) => item.href === `/traits/${traitId}` && item.summary === 'Updated description')).toBe(true)
+
+      const role = await app.request('/api/admin/group-roles', {
+        method: 'POST',
+        headers: auth(admin.token),
+        body: JSON.stringify({ name: 'Feed Role', description: 'Visible role' })
+      })
+      expect(role.status).toBe(200)
+      expect((await feed()).some((item) => item.entityType === 'group_role' && item.title === 'Feed Role' && item.summary === 'Added name and description')).toBe(true)
+
+      const group = await app.request('/api/admin/groups', {
+        method: 'POST',
+        headers: auth(admin.token),
+        body: JSON.stringify({ name: 'Feed Group', description: 'Visible group' })
+      })
+      expect(group.status).toBe(200)
+      const groupId = (await group.json() as { data: { id: string } }).data.id
+      expect((await feed()).some((item) => item.entityType === 'group' && item.title === 'Feed Group' && item.summary === 'Added name and description')).toBe(true)
+
+      const membership = await app.request('/api/admin/memberships', {
+        method: 'POST',
+        headers: auth(admin.token),
+        body: JSON.stringify({ groupId, studentId, roleName: 'Feed Role', startDate: '2026-01-01', endDate: null })
+      })
+      const membershipBody = await membership.json() as { data?: { id: string } }
+      expect(membership.status, JSON.stringify(membershipBody)).toBe(200)
+      expect((await feed()).some((item) => item.entityType === 'group_membership' && item.title === 'Feed Student in Feed Group' && item.summary === 'Added role and start date' && item.href === `/groups/${groupId}`)).toBe(true)
+
+      const ended = await app.request(`/api/admin/memberships/${membershipBody.data?.id}`, {
+        method: 'PATCH',
+        headers: auth(admin.token),
+        body: JSON.stringify({ endDate: '2026-02-01' })
+      })
+      expect(ended.status).toBe(200)
+      expect((await feed()).some((item) => item.entityType === 'group_membership' && item.summary === 'Updated end date')).toBe(true)
+
+      const relationship = await app.request('/api/admin/relationships', {
+        method: 'POST',
+        headers: auth(admin.token),
+        body: JSON.stringify({
+          sourceType: 'student',
+          sourceId: studentId,
+          targetType: 'group',
+          targetId: groupId,
+          relationshipTypeName: 'Feed Relation',
+          generalComment: 'Works with the group'
+        })
+      })
+      expect(relationship.status).toBe(200)
+      const afterRelationship = await feed()
+      expect(afterRelationship.some((item) => item.entityType === 'relationship_type' && item.title === 'Feed Relation' && item.summary === 'Added name')).toBe(true)
+      expect(afterRelationship.some((item) => item.entityType === 'relationship' && item.title === 'Feed Student → Feed Group' && item.summary === 'Added general comment and relationship type')).toBe(true)
+
+      const evidenceResponse = await app.request('/api/admin/evidence', {
+        method: 'POST',
+        headers: auth(admin.token),
+        body: JSON.stringify({ summary: 'Feed evidence', evidenceDate: '2026-03-01', urls: [], traitIds: [traitId] })
+      })
+      const evidenceBody = await evidenceResponse.json() as { data?: { id: string } }
+      expect(evidenceResponse.status, JSON.stringify(evidenceBody)).toBe(200)
+      const evidenceId = evidenceBody.data?.id ?? ''
+      const afterEvidence = await feed()
+      expect(afterEvidence.some((item) => item.entityType === 'evidence' && item.title === 'Feed evidence' && item.summary === 'Added summary, evidence date, and verification' && item.href === `/evidence/${evidenceId}`)).toBe(true)
+      expect(afterEvidence.some((item) => item.href === `/traits/${traitId}` && item.summary === 'Updated evidence link')).toBe(true)
+
+      const secondEvidence = await app.request('/api/admin/evidence', {
+        method: 'POST',
+        headers: auth(admin.token),
+        body: JSON.stringify({ summary: 'Second evidence', evidenceDate: '2026-03-02', urls: [] })
+      })
+      const secondId = (await secondEvidence.json() as { data: { id: string } }).data.id
+      const attached = await app.request(`/api/admin/traits/${traitId}/evidence`, {
+        method: 'POST',
+        headers: auth(admin.token),
+        body: JSON.stringify({ evidenceId: secondId })
+      })
+      expect(attached.status).toBe(200)
+      const afterAttach = await feed()
+      expect(afterAttach.some((item) => item.href === `/traits/${traitId}` && item.summary === 'Updated evidence link')).toBe(true)
+      expect(afterAttach.some((item) => item.href === `/evidence/${secondId}` && item.summary === 'Updated evidence link')).toBe(true)
+
+      const upload = await app.request(`/api/evidence/${evidenceId}/attachments/authorize`, {
+        method: 'POST',
+        headers: auth(admin.token),
+        body: JSON.stringify({ fileName: 'hidden-file-name.pdf', contentType: 'application/pdf', sizeBytes: 120 })
+      })
+      expect(upload.status).toBe(200)
+      const afterUpload = await feed()
+      expect(afterUpload.some((item) => item.href === `/evidence/${evidenceId}` && item.summary === 'Updated attachment')).toBe(true)
+      expect(JSON.stringify(afterUpload)).not.toContain('hidden-file-name.pdf')
+
+      const verified = await app.request(`/api/admin/evidence/${secondId}/verify`, {
+        method: 'POST',
+        headers: auth(admin.token),
+        body: JSON.stringify({ verificationStatus: 'disputed', reliabilityScore: 4 })
+      })
+      expect(verified.status).toBe(200)
+      expect((await feed()).some((item) => item.href === `/evidence/${secondId}` && item.summary === 'Updated verification and reliability')).toBe(true)
+
+      const archivedGroup = await app.request(`/api/admin/groups/${groupId}`, {
+        method: 'PATCH',
+        headers: auth(admin.token),
+        body: JSON.stringify({ status: 'archived' })
+      })
+      expect(archivedGroup.status).toBe(200)
+      expect((await feed()).some((item) => item.href === `/groups/${groupId}` && item.summary === 'Archived record')).toBe(true)
+
+      const deactivated = await app.request(`/api/admin/categories/${categoryId}`, {
+        method: 'PATCH',
+        headers: auth(admin.token),
+        body: JSON.stringify({ isActive: false })
+      })
+      expect(deactivated.status).toBe(200)
+      expect((await feed()).some((item) => item.title === 'Feed Category' && item.summary === 'Updated active state')).toBe(true)
+
+      const queued = await app.request('/api/submissions', {
+        method: 'POST',
+        headers: auth(member.token),
+        body: JSON.stringify({
+          entityType: 'trait',
+          operation: 'create',
+          proposedData: { studentId, categoryId, title: 'Pending trait marker', description: null }
+        })
+      })
+      const queuedBody = await queued.json() as { data: { id: string } }
+      expect(queued.status).toBe(200)
+      expect(JSON.stringify(await feed())).not.toContain('Pending trait marker')
+
+      const approved = await app.request(`/api/admin/submissions/${queuedBody.data.id}/approve`, {
+        method: 'POST',
+        headers: auth(admin.token)
+      })
+      expect(approved.status).toBe(200)
+      expect((await feed()).some((item) => item.entityType === 'trait' && item.title === 'Pending trait marker · Feed Student' && item.summary === 'Added title and category')).toBe(true)
+
+      const archivedTrait = await app.request(`/api/admin/traits/${traitId}/archive`, {
+        method: 'POST',
+        headers: auth(admin.token)
+      })
+      expect(archivedTrait.status).toBe(200)
+      const afterArchive = await feed()
+      expect(afterArchive.some((item) => item.href === `/traits/${traitId}` && item.summary === 'Archived record')).toBe(true)
+      expect(afterArchive.some((item) => item.href === `/evidence/${evidenceId}` && item.summary === 'Updated evidence link')).toBe(true)
+
+      const saved = await app.request('/api/me/private-profile', {
+        method: 'PATCH',
+        headers: auth(member.token),
+        body: JSON.stringify({ sexualityPreset: 'other', sexualityCustom: 'profile-marker-not-for-feed' })
+      })
+      expect(saved.status).toBe(200)
+      const serialized = JSON.stringify(await feed())
+      expect(serialized).not.toContain('profile-marker-not-for-feed')
+      expect(serialized).not.toContain('sexual')
+      expect(serialized).not.toContain('feed-admin@northbridge.test')
+      expect(serialized).not.toContain('changedBy')
+    })
+  })
 })

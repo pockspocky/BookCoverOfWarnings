@@ -146,6 +146,7 @@ export interface RecentUpdate {
   entityType: EntityType
   title: string
   href: string
+  summary: string
   occurredAt: string
 }
 

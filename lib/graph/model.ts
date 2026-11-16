@@ -55,7 +55,11 @@ export function degrees(edges: Array<{ source: string, target: string }>) {
 
 const lane = 14
 
-/** Perpendicular offsets so parallel and reciprocal relationships stay readable. */
+/** Perpendicular offsets so parallel and reciprocal relationships stay readable.
+ * The offset is in each edge's own direction frame. A reciprocal edge's
+ * perpendicular flips, so both directions use a positive local offset and the
+ * arrows land on opposite sides of the center line.
+ */
 export function parallelOffsets(edges: Array<{ id: string, source: string, target: string }>) {
   const grouped = new Map<string, string[]>()
   for (const edge of edges) {
@@ -69,9 +73,8 @@ export function parallelOffsets(edges: Array<{ id: string, source: string, targe
     const separator = key.indexOf('\0')
     const source = key.slice(0, separator)
     const target = key.slice(separator + 1)
-    const reverse = grouped.has(`${target}\0${source}`)
-    const side = reverse ? (source < target ? 1 : -1) : 0
-    const bundleShift = side === 0 ? 0 : side * lane * (0.75 + (ids.length - 1) / 2)
+    const reverse = source !== target && grouped.has(`${target}\0${source}`)
+    const bundleShift = reverse ? lane * (0.75 + (ids.length - 1) / 2) : 0
     ids.forEach((id, index) => {
       const centered = index - (ids.length - 1) / 2
       offsets.set(id, bundleShift + centered * lane)
