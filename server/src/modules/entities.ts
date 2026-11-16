@@ -70,6 +70,7 @@ export async function attachTraitEvidence(db: Database, traitId: string, evidenc
   const linked = await link(db, traitId, evidenceId)
   if (!linked) return
   await noteEvidenceLink(db, trait, traitId, actorId)
+  await noteEvidenceAssociation(db, evidenceId, actorId, 'attached')
 }
 
 async function noteEvidenceLink(db: Database, trait: { title: string; currentVersion: number }, traitId: string, actorId: string) {
@@ -81,6 +82,21 @@ async function noteEvidenceLink(db: Database, trait: { title: string; currentVer
     version,
     previousValues: { title: trait.title, evidenceLink: 'absent' },
     newValues: { title: trait.title, evidenceLink: 'attached' },
+    actorId
+  })
+}
+
+async function noteEvidenceAssociation(db: Database, evidenceId: string, actorId: string, state: 'attached' | 'absent') {
+  const rows = await db.select({ summary: evidence.summary, status: evidence.status }).from(evidence).where(eq(evidence.id, evidenceId)).limit(1)
+  const row = rows[0]
+  if (!row || row.status === 'archived') return
+  await db.update(evidence).set({ updatedAt: new Date() }).where(eq(evidence.id, evidenceId))
+  await writeRevision(db, {
+    entityType: 'evidence',
+    entityId: evidenceId,
+    version: await nextRevisionVersion(db, 'evidence', evidenceId),
+    previousValues: { summary: row.summary, evidenceLink: state === 'attached' ? 'absent' : 'attached' },
+    newValues: { summary: row.summary, evidenceLink: state },
     actorId
   })
 }
@@ -547,8 +563,10 @@ export const traitModule: EntityModule = {
     if (!row) throw ApiError.notFound()
     if (row.status === 'archived') return
     const version = row.currentVersion + 1
+    const links = await db.select({ evidenceId: traitEvidence.evidenceId }).from(traitEvidence).where(eq(traitEvidence.traitId, id))
     await db.update(traits).set({ status: 'archived', currentVersion: version, updatedAt: new Date() }).where(eq(traits.id, id))
     await db.delete(traitEvidence).where(eq(traitEvidence.traitId, id))
+    for (const link of links) await noteEvidenceAssociation(db, link.evidenceId, actorId, 'absent')
     await writeRevision(db, {
       entityType: 'trait',
       entityId: id,

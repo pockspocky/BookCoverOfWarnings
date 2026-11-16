@@ -80,19 +80,48 @@ function formatWhen(value: string) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
 }
 
-onMounted(async () => {
+let requestId = 0
+
+async function loadDashboard() {
+  const request = ++requestId
   try {
     const [nextStats, nextRecent] = await Promise.all([
       $api.dashboard.stats(),
       $api.dashboard.recent()
     ])
+    if (request !== requestId) return
     stats.value = nextStats
     recent.value = nextRecent
+    recentError.value = ''
   } catch (error) {
-    recentError.value = errorMessage(error)
+    if (request !== requestId) return
+    if (!recent.value.length) recentError.value = errorMessage(error)
   } finally {
-    pending.value = false
+    if (request === requestId) pending.value = false
   }
+}
+
+function refreshIfVisible() {
+  if (document.visibilityState === 'visible') void loadDashboard()
+}
+
+function refreshIfRestored(event: PageTransitionEvent) {
+  if (event.persisted) void loadDashboard()
+}
+
+onMounted(() => {
+  void loadDashboard()
+  document.addEventListener('visibilitychange', refreshIfVisible)
+  window.addEventListener('pageshow', refreshIfRestored)
+})
+
+onActivated(() => {
+  void loadDashboard()
+})
+
+onUnmounted(() => {
+  document.removeEventListener('visibilitychange', refreshIfVisible)
+  window.removeEventListener('pageshow', refreshIfRestored)
 })
 
 function go() {

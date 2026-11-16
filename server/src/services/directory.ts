@@ -657,8 +657,12 @@ async function resolvePlace(db: Database, entityType: string, entityId: string, 
     return { title: rows[0]?.displayName ?? fallbackTitle, href: `/students/${entityId}` }
   }
   if (entityType === 'trait') {
-    const rows = await db.select({ title: traits.title }).from(traits).where(eq(traits.id, entityId)).limit(1)
-    return { title: rows[0]?.title ?? fallbackTitle, href: `/traits/${entityId}` }
+    const rows = await db.select({ title: traits.title, studentId: traits.studentId }).from(traits).where(eq(traits.id, entityId)).limit(1)
+    const row = rows[0]
+    if (!row) return { title: fallbackTitle, href: `/traits/${entityId}` }
+    const names = await db.select({ displayName: students.displayName }).from(students).where(eq(students.id, row.studentId)).limit(1)
+    const student = names[0]?.displayName
+    return { title: student ? `${row.title} · ${student}` : row.title, href: `/traits/${entityId}` }
   }
   if (entityType === 'evidence') {
     const rows = await db.select({ summary: evidence.summary }).from(evidence).where(eq(evidence.id, entityId)).limit(1)
